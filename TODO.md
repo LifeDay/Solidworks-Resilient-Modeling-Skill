@@ -109,5 +109,15 @@ None of these are in the current notes and each "looks right" while being wrong:
 
 ## Not yet actioned / needs a decision
 
-- Confirm whether `Add3`'s failure is 2026-specific or applies more broadly before
-  rewriting the guidance as a blanket "use Add2" — session only tested one build.
+- [x] Confirm whether `Add3`'s failure is 2026-specific or applies more broadly before
+      rewriting the guidance as a blanket "use Add2" — session only tested one build.
+      **Re-tested 2026-09-12** against the same machine's SolidWorks 2026 SP1.1
+      (rev 34.1.1.11) — the only version installed here, so this narrows the
+      confirmation, not the scope. `Add3` reproducibly returns `-1` with no
+      exception and adds no equation, across two fresh scratch documents and
+      both `ConfigurationOption` values tried (`swAllConfiguration`,
+      `swThisConfiguration`). `Add2` worked correctly both times. Whether the
+      failure holds on other SolidWorks versions is still unconfirmed — no
+      second install was available to test against. Guidance in api-notes.md
+      updated to state the 2026 finding as confirmed (not single-sample) while
+      still flagging cross-version behavior as open.

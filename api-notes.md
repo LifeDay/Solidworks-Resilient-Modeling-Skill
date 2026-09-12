@@ -91,20 +91,31 @@ harmless and should stay that way.
 `EquationMgr` hangs off `ModelDoc2`:
 
 ```python
-eq = model.GetEquationMgr()
+eq = model.GetEquationMgr  # zero-arg getter — no parens, see dynamic-dispatch note above
 eq.Add2(-1, '"plate_width" = 120', True)          # global variable
 eq.Add2(-1, '"D1@Sketch1" = "plate_width"', True)  # driven dimension
 ```
 
-Index `-1` appends. **Try `Add2` first.** `Add3` is the documented primary call
-and `Add2`/`Add` are framed as fallbacks for older releases, but on SW2026
-(rev 34.1.1) `Add3` silently failed — returned `-1`, raised nothing, added no
-equation — while `Add2(index, equation_text, use_automatic_solve_order)` worked
-correctly. That session only tested one build, so treat this as "verify which
-one actually lands an equation on the target version" rather than a blanket
-"`Add3` is broken" — but don't assume newer-is-safer here. `eq.GetCount()`,
-`eq.Equation(i)`, and `eq.Status(i)` are useful for verifying what actually
-landed, regardless of which `Add*` call you used.
+Index `-1` appends. **Use `Add2`, not `Add3`.** `Add3` is the documented primary
+call and `Add2`/`Add` are framed as fallbacks for older releases, but on SW2026
+(rev 34.1.1.11, SP1.1) `Add3` silently fails — returns `-1`, raises nothing,
+adds no equation — while `Add2(index, equation_text, use_automatic_solve_order)`
+works correctly. Confirmed reproducible twice, in separate scratch documents,
+independent of `ConfigurationOption` (`swAllConfiguration=1` and
+`swThisConfiguration=2` both silently no-op). This still hasn't been tested
+against any other SolidWorks version — no second install was available — so
+treat "`Add3` is broken on 2026" as confirmed and "`Add3` is broken in general"
+as unverified; try `Add2` first regardless and check `eq.GetCount` to confirm.
+
+If you do need `Add3`'s signature
+(`Add3(Index, Equation, ConfigurationOption, ConfigurationName)`), its trailing
+`ConfigurationName` `Object` parameter is pickier than the `VT_DISPATCH` fix
+documented above for `SelectByID2`: a bare `None`, `""`, or `[]` all raise
+`DISP_E_TYPEMISMATCH` here. Use `win32com.client.VARIANT(pythoncom.VT_EMPTY, None)`
+to get the call to actually execute — at which point, on this build, it still
+just returns `-1`. `eq.GetCount`, `eq.Equation(i)`, and `eq.Status(i)` are
+useful for verifying what actually landed, regardless of which `Add*` call you
+used.
 
 A dimension driven by an equation reports as driven; one set through `model.Parameter("D1@Sketch1").SystemValue = 0.12` does not. The checker uses this distinction to measure how much of the model is genuinely parameterized.
 
