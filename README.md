@@ -22,7 +22,18 @@ See [SKILL.md](SKILL.md) for the full ruleset.
 
 ## Using the skill
 
-Drop this repo's contents into your Claude Code skills directory (or point Claude Code at it) so `solidworks-rms` is available. It activates automatically for SolidWorks modeling work — writing or editing macros that create geometry, driving SolidWorks via MCP, reviewing an existing feature tree, or building a part family — even if you don't say "RMS" explicitly.
+**Option 1 — Claude Code plugin marketplace (recommended):**
+
+```
+/plugin marketplace add LifeDay/Solidworks-Skills
+/plugin install solidworks-rms@solidworks-skills
+```
+
+**Option 2 — manual clone:**
+
+Clone this repo's contents into your Claude Code skills directory (`~/.claude/skills/solidworks-rms/`, or a project's `.claude/skills/solidworks-rms/`) so `solidworks-rms` is available.
+
+Either way, the skill activates automatically for SolidWorks modeling work — writing or editing macros that create geometry, driving SolidWorks via MCP, reviewing an existing feature tree, or building a part family — even if you don't say "RMS" explicitly.
 
 ## Verifying a model
 

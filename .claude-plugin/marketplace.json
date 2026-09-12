@@ -1,0 +1,17 @@
+{
+  "name": "solidworks-skills",
+  "owner": {
+    "name": "LifeDay"
+  },
+  "plugins": [
+    {
+      "name": "solidworks-rms",
+      "source": ".",
+      "description": "SolidWorks Resilient Modeling Strategy skill with API notes and checker script",
+      "version": "1.0.0",
+      "author": {
+        "name": "LifeDay"
+      }
+    }
+  ]
+}
