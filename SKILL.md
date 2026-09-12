@@ -18,6 +18,31 @@ Two artifacts, always:
 
 Both edit surfaces must produce the same rebuild. A model that can only be changed by re-running the script has failed half the requirement.
 
+## Working safely against a live session
+
+A script talking to `SldWorks.Application` over COM is talking to the user's actual,
+already-running SolidWorks session — not a sandbox. In one observed session,
+`sw.NewPart()` returned the user's real `ActiveDoc` instead of creating a new part.
+Trusting that handle led to an exploratory `InsertSketch` call landing a stray
+sketch in the user's real document, and a later `CloseDoc` call — using a title
+captured earlier in the script — closing that same real, unsaved document.
+
+Rules, not suggestions:
+
+- **Never call a destructive or mutating method** (`CloseDoc`, `QuitDoc`,
+  `EditDelete`, `SetSuppression2`, and the like) **without re-fetching and
+  re-checking the target document's identity in the same breath as the call.**
+  A title or handle captured earlier in the script is not trustworthy evidence of
+  what that handle still points to — re-read `GetTitle` (no parens — see
+  api-notes.md) or a custom property immediately before the call that acts on it.
+- **Never run exploratory API probes** (`InsertSketch`, or anything else poking
+  at geometry to see what happens) **against `sw.ActiveDoc` or an unverified
+  "scratch" document.** The user's own document may be open in the same process.
+- When a scratch document is needed, **give it an identifying custom property**
+  at creation, and **assert `doc.GetTitle not in known_user_titles`** before any
+  call that mutates or closes it. Do not proceed on an assumption that a "new"
+  document call actually created something new.
+
 ## The six groups
 
 Every feature belongs to exactly one top-level folder. Build in this order — SolidWorks folders must hold contiguous features and features cannot be reordered past a dependency, so there is no reorganize-afterward path.
@@ -97,12 +122,12 @@ The same logic applies one level up.
 Run the checker before declaring a model finished:
 
 ```
-python scripts/rms_check.py
+python rms_check.py
 ```
 
 It connects to the running SolidWorks session, walks the active document, and reports per-rule PASS/FAIL. It also tests that each `4-Detail` feature suppresses individually without a rebuild error, which is the fastest way to catch a Detail-to-Detail reference that slipped through.
 
-First time against an unfamiliar part, run `python scripts/rms_check.py --dump-types` to print every feature's name and API type string. Feature type names vary across SolidWorks versions and the checker's classification sets at the top of the file may need calibrating against real parts.
+First time against an unfamiliar part, run `python rms_check.py --dump-types` to print every feature's name and API type string. Feature type names vary across SolidWorks versions and the checker's classification sets at the top of the file may need calibrating against real parts.
 
 Report the checker output to the user. Do not describe a model as complete while a rule is failing.
 
@@ -123,4 +148,4 @@ Needing more than one or two exceptions on a part usually means the Core is wron
 
 ## API notes
 
-See `references/api-notes.md` for the SolidWorks API calls this skill depends on — folders, equations, descriptions, suppression, parent/child traversal, and sketch constraint status. Verify signatures against the local SolidWorks API Help before relying on them; they shift between releases.
+See `api-notes.md` for the SolidWorks API calls this skill depends on — folders, equations, descriptions, suppression, parent/child traversal, and sketch constraint status. Verify signatures against the local SolidWorks API Help before relying on them; they shift between releases.

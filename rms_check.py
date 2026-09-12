@@ -111,7 +111,13 @@ class Report(object):
 # --------------------------------------------------------------------------
 
 def walk(model):
-    """Return an ordered list of (feature, group_name_or_None, depth)."""
+    """Return an ordered list of (feature, group_name_or_None, depth).
+
+    Flat traversal (FirstFeature/GetNextFeature) surfaces a synthetic
+    "<FolderName>___EndTag___" feature immediately after a folder's contents.
+    It is itself FtrFolder-typed, so every rule below that matters skips it
+    the same way it skips real folders - do not special-case it away.
+    """
     out = []
     feat = model.FirstFeature()
     current_group = None
