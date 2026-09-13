@@ -14,7 +14,8 @@ Every sample assumes the helpers:
 ```python
 import sys; sys.path.insert(0, "scripts")
 from sw_helpers import (connect, call0, select_by_id2, last_feature,
-                        add_equation, wrap_in_folder, no_input_dim_dialog, mm)
+                        add_equation, wrap_in_folder, no_input_dim_dialog, mm,
+                        none_dispatch, circular_edges)
 ```
 
 ## Before anything: preflight
@@ -30,6 +31,31 @@ dimension call opens a modal dialog and the script appears to hang. See
 
 Its document list is what you pass as `known_user_titles`; nothing mutating
 should run without `assert_scratch_doc`.
+
+## Where sketch coordinates land
+
+**`SketchManager.Create*(x, y, z, ...)` arguments are not global model
+coordinates.** Measured by sketching a test circle at distinct coordinate
+values, extruding it, and reading the resulting body's bounding box:
+
+| Sketch plane | arg 1 → | arg 2 → | arg 3 | Plane sits at |
+|---|---|---|---|---|
+| Front Plane | global **Y** | global **Z** | discarded | X = 0 |
+| Right Plane | global **−X** (negated) | global **Z** | discarded | Y = 0 |
+| Top Plane | *not measured* | | | |
+
+This is not the textbook "Front Plane = XY" layout, so it is very likely a
+property of the part template in use on the test machine, not of the API. **Treat
+the table as that install only.** Before placing geometry on a plane you have not
+measured against your own template, repeat the probe in a scratch document: one
+circle at distinct values such as `(0.011, 0.023, 0.037)`, a short extrude, then
+compare the body's bounding-box centre with what you passed. Mixing up two axes
+or missing the Right Plane sign flip produces a model that rebuilds clean with
+features in the wrong place.
+
+Model-space reads — `vertex.GetPoint`, `ICurve.CircleParams`, bounding boxes —
+come back in **global** coordinates. Convert with this mapping before comparing
+them against the values you sketched with.
 
 ## Base plate: sketch on a default plane, then extrude
 
@@ -187,8 +213,94 @@ order. **Check which axis is the depth direction for the plane you actually
 used** — sketching on Front Plane put the extrude direction at tuple index 0,
 with the two in-sketch-plane coordinates at indices 1 and 2, i.e.
 `(depth, sketch_y, sketch_z)`, not the `(x, y, z)` naively expected from the
-sketch's own 2D system. Dump raw vertex tuples for known edges before writing
-the filter rather than assuming an axis order.
+sketch's own 2D system. That matches the measured plane mapping in
+[where sketch coordinates land](#where-sketch-coordinates-land). Dump raw
+vertex tuples for known edges before writing the filter rather than assuming
+an axis order.
+
+### Circular edges
+
+The same lesson held for circular fillet edges: coordinate-guess `SelectByID2`
+picks were unreliable, but matching each circular edge's centre and radius
+worked:
+
+```python
+doc.ClearSelection2(True)
+for edge in circular_edges(body, centre_xyz, radius):   # global coords, metres
+    edge.Select4(True, none_dispatch())
+```
+
+`circular_edges` reads `ICurve.CircleParams`. That is a bare property returning
+`(cx, cy, cz, nx, ny, nz, r)`; there is no `GetCircleParams()` method. Compute
+`centre_xyz` from the parameter set *through the plane mapping*, not from the raw
+sketch arguments. Confirm with `selected_count(doc)` before calling
+`FeatureFillet3`.
+
+## Sweep paths: chain arcs with CreateTangentArc
+
+**Build a multi-segment path with `CreateTangentArc`, not `Create3PointArc`.**
+A `Create3PointArc` next to a separately created `CreateLine` is not
+topologically connected, even at numerically identical endpoints, and
+`InsertProtrusionSwept4` returns `None` for the path. See
+[troubleshooting.md](troubleshooting.md#insertprotrusionswept4-returns-none-for-a-line-plus-arc-path).
+`CreateTangentArc` continues from the previous entity's *actual* endpoint, and
+the identical sweep succeeded immediately.
+
+```python
+select_by_id2(ext, "Right Plane", "PLANE")
+sm.InsertSketch(True)
+sm.CreateLine(x0, y0, 0, x1, y1, 0)
+sm.CreateTangentArc(x1, y1, 0, x2, y2, 0, arc_type)   # (start, end, swTangentArcTypes_e)
+sm.InsertSketch(True)
+path = last_feature(doc)
+```
+
+Signatures from the SW2026 typelib:
+
+- `ISketchManager.CreateTangentArc(X1, Y1, Z1, X2, Y2, Z2, ArcType)`.
+  `swTangentArcTypes_e`: `swForward=1`, `swLeft=2`, `swBack=3`, `swRight=4`.
+  The session did not record which value it used. Resolve through
+  `constants_module()` rather than hard-coding.
+- `IFeatureManager.InsertProtrusionSwept4` takes **20** positional args:
+
+  ```
+  Propagate, Alignment, TwistCtrlOption, KeepTangency, BAdvancedSmoothing,
+  StartMatchingType, EndMatchingType, IsThinBody, Thickness1, Thickness2,
+  ThinType, PathAlign, Merge, UseFeatScope, UseAutoSelect, TwistAngle,
+  BMergeSmoothFaces, CircularProfile, CircularProfileDiameter, Direction
+  ```
+
+  With `CircularProfile=True` and a diameter, no profile sketch is needed. Per
+  API Help, only the path gets selected; the selection marks the session used
+  were not recorded. An explicit profile sketch plus
+  path sketch also works, but did not fix the unconnected-path failure.
+
+What was confirmed: arc-only, line-only, line+line (sharp corner) and
+line → `CreateTangentArc` paths all swept. Not tested: a `CreateLine` placed
+*after* an arc. If one returns `None`, suspect the same connectivity problem.
+Also watch for
+[exactly horizontal `CreateLine` calls](troubleshooting.md#createline-returns-none-for-a-horizontal-line),
+which return `None` outright.
+
+## Saving, opening and screenshots
+
+```python
+import os
+doc.Save()                                              # already-named document, in place
+doc = sw.OpenDoc(os.path.abspath(path), doc_type)       # swDocumentTypes_e; returns doc or None
+doc.SaveBMP(os.path.abspath("view.bmp"), 1280, 720)     # relative path -> False, silently
+```
+
+- **`OpenDoc`, not `OpenDoc6`.** `OpenDoc6`'s `ByRef Long` `Errors`/`Warnings`
+  raise `Type mismatch` with `None` or `[0]`. The same applies to the 6-arg
+  `SaveAs`; no working SaveAs-to-new-name form is recorded yet. See
+  [troubleshooting.md](troubleshooting.md#saveas-or-opendoc6-raises-type-mismatch).
+- **`SaveBMP` needs an absolute path.** A relative one returns `False` with no
+  file written.
+- A document opened this way is subject to the same identity rules as any
+  other. If the file is already open in the user's session, assume `OpenDoc`
+  hands back *their* document; this is unconfirmed. Run `assert_scratch_doc`
+  before mutating it.
 
 ## Global variables and driven dimensions
 

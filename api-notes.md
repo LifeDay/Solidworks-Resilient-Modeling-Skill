@@ -41,7 +41,7 @@ If you read nothing else:
 ## Helpers
 
 Do not re-derive `call0`, `none_dispatch`, `select_by_id2`, `last_feature`,
-`add_equation` or `wrap_in_folder` per script — re-deriving them is how two
+`add_equation`, `wrap_in_folder` or `circular_edges` per script — re-deriving them is how two
 SolidWorks crashes happened. They ship in
 [`scripts/sw_helpers.py`](scripts/sw_helpers.py), and every recipe assumes them.
 

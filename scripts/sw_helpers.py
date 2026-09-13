@@ -203,6 +203,35 @@ def selected_type(doc, index=1):
     return doc.SelectionManager.GetSelectedObjectType3(index, -1)
 
 
+def circular_edges(body, center, radius, tol=1e-6):
+    """Edges of `body` that are circles of `radius` centred on `center`.
+
+    `center` is a model-space (x, y, z) tuple in metres, computed from the
+    parameter set. Sketch Create* arguments are NOT global coordinates, so map
+    them first - see references/api-recipes.md, "Where sketch coordinates land".
+
+    Coordinate-guess SelectByID2("", "EDGE", x, y, z) picks were unreliable for
+    fillet edges; matching each circular edge's CircleParams was reliable.
+    CircleParams is a bare property returning (cx, cy, cz, nx, ny, nz, r) -
+    there is no GetCircleParams() method, and calling one raises AttributeError.
+
+        for edge in circular_edges(body, (0, y, z), mm(4)):
+            edge.Select4(True, none_dispatch())
+    """
+    found = []
+    for edge in body.GetEdges() or ():   # GetEdges does not auto-invoke
+        curve = edge.GetCurve
+        if not curve.IsCircle:
+            continue
+        cx, cy, cz, _nx, _ny, _nz, r = curve.CircleParams
+        if (abs(r - radius) <= tol
+                and abs(cx - center[0]) <= tol
+                and abs(cy - center[1]) <= tol
+                and abs(cz - center[2]) <= tol):
+            found.append(edge)
+    return found
+
+
 # --------------------------------------------------------------------------
 # Tree traversal
 # --------------------------------------------------------------------------

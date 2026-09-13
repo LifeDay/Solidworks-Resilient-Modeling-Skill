@@ -95,6 +95,20 @@ win32com.client.VARIANT(pythoncom.VT_EMPTY, None)      # sw_helpers.none_empty()
 — at which point, on this build, `Add3` still just returns `-1`. See
 [troubleshooting.md](troubleshooting.md#add3-adds-no-equation-and-returns--1).
 
+### ByRef Long out-parameters
+
+`Errors` / `Warnings` parameters declared `ByRef Long` (type `16387`,
+`VT_BYREF | VT_I4`, in the generated typelib) reject every plain Python value
+tried: `None`, `0` and `[0]` all raise `Type mismatch`. Confirmed on
+`sw.ActivateDoc2`, `sw.OpenDoc6`, and the 6-arg `SaveAs(Name, Version, Options,
+ExportData, Errors, Warnings)`.
+
+**Use the overload without out-parameters** rather than fight the marshaling:
+`sw.OpenDoc(Name, Type)` instead of `OpenDoc6`, `doc.Save()` for an
+already-named document. Passing `VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)`
+is the obvious next thing to try and has **not** been tested here. See
+[troubleshooting.md](troubleshooting.md#saveas-or-opendoc6-raises-type-mismatch).
+
 ## Early binding is a known-bad path
 
 `win32com.client.gencache.EnsureDispatch("SldWorks.Application")` — and
@@ -138,10 +152,23 @@ assumed; `swConstrainedStatus_e` is `1`=unknown, `2`=under, `3`=fully,
 All lengths in the API are **metres** and all angles **radians**, regardless of
 document units. `sw_helpers.mm()` and `sw_helpers.deg()` convert.
 
+Sketch `Create*` arguments are **not** global `(X, Y, Z)`: their mapping to
+model space depends on the plane, and on one plane includes a sign flip. See
+[api-recipes.md](api-recipes.md#where-sketch-coordinates-land).
+
 ## Method-location surprises
 
 None of these are guessable by pattern-matching from nearby calls — each "looks
 right" and is wrong:
+
+- **`ICurve.CircleParams` is a property**, with no `Get` prefix. It returns
+  `(cx, cy, cz, nx, ny, nz, r)`. `curve.GetCircleParams()` raises
+  `AttributeError`. The typelib declares it as a property, unlike the
+  neighbouring `IsCircle` / `IsLine`, which are zero-arg methods that auto-invoke.
+- **The 6-arg `SaveAs(Name, Version, Options, ExportData, Errors, Warnings)` is
+  declared on `IModelDocExtension`** in the typelib. `IModelDoc2.SaveAs` takes
+  only `NewName`. Check which object you are actually calling before debugging
+  its arguments.
 
 - **`InsertSketch2` does not exist** via dynamic dispatch on `SketchManager` on
   this build. Use `InsertSketch(bool)` — same effect, toggles sketch edit mode.

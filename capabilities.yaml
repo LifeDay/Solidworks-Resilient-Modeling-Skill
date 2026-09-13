@@ -93,8 +93,59 @@ capabilities:
     verified_versions: ["2026 SP1.1"]
     notes: >
       FeatureFillet3, 14 args, Options=2 (uniform radius) - not 0. Select edges by
-      iterating body.GetEdges() and filtering; coordinate-guess picks are flaky.
+      iterating body.GetEdges() and filtering; coordinate-guess picks are flaky
+      (confirmed twice, on straight and on circular edges). Circular edges match
+      reliably on ICurve.CircleParams center + radius - sw_helpers.circular_edges.
     reference: references/troubleshooting.md#featurefillet3-returns-none
+
+  - id: sketch_plane_mapping
+    label: Knowing where Create* sketch coordinates land in model space
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      Create* args are not global (X,Y,Z). Measured on this install's part
+      template: Front Plane arg1->Y, arg2->Z, arg3 discarded (plane at X=0);
+      Right Plane arg1->-X (negated), arg2->Z, arg3 discarded (plane at Y=0).
+      Top Plane not measured. Likely template-dependent - re-measure elsewhere.
+    reference: references/api-recipes.md#where-sketch-coordinates-land
+
+  - id: sketch_lines_arcs
+    label: Lines and arcs in a sketch
+    level: pilot
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      CreateLine returns None for an exactly horizontal line (Y1 == Y2);
+      a 0.01mm offset avoids it. Vertical and diagonal lines are fine.
+      Create3PointArc does not connect to an adjacent CreateLine even at
+      identical coordinates; CreateTangentArc does.
+    reference: references/troubleshooting.md#createline-returns-none-for-a-horizontal-line
+
+  - id: sweep_boss
+    label: Swept boss along a multi-segment path
+    level: pilot
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      InsertProtrusionSwept4 (IFeatureManager, 20 args) with CircularProfile.
+      Worked with arc-only, line-only, line+line and line+CreateTangentArc
+      paths. Every line+Create3PointArc path returned None.
+    reference: references/api-recipes.md#sweep-paths-chain-arcs-with-createtangentarc
+
+  - id: document_save_open
+    label: Saving and reopening documents
+    level: pilot
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      doc.Save() works for an already-named document. sw.OpenDoc(Name, Type)
+      works. SaveAs and OpenDoc6 raise Type mismatch on their ByRef Long
+      Errors/Warnings args - no working SaveAs-to-new-name form recorded yet.
+    reference: references/troubleshooting.md#saveas-or-opendoc6-raises-type-mismatch
+
+  - id: view_screenshot
+    label: Saving the current view as an image
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: "doc.SaveBMP(path, w, h). Path must be absolute - a relative one returns False silently."
+    reference: references/troubleshooting.md#savebmp-returns-false-and-writes-nothing
 
   - id: equation_add
     label: Global variables and equation-driven dimensions

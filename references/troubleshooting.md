@@ -22,6 +22,9 @@ superseded by a root cause, it is marked so rather than deleted.
 - [FeatureFillet3 returns None](#featurefillet3-returns-none)
 - [MoveToFolder does nothing, or raises a type mismatch](#movetofolder-does-nothing-or-raises-a-type-mismatch)
 - [AddHorizontalDimension2 returns None for every entity in one sketch](#addhorizontaldimension2-returns-none-for-every-entity-in-one-sketch)
+- [CreateLine returns None for a horizontal line](#createline-returns-none-for-a-horizontal-line)
+- [InsertProtrusionSwept4 returns None for a line-plus-arc path](#insertprotrusionswept4-returns-none-for-a-line-plus-arc-path)
+- [SaveBMP returns False and writes nothing](#savebmp-returns-false-and-writes-nothing)
 
 **COM type and member errors**
 - ['X' object is not callable, or 'Member not found' (-2147352573)](#x-object-is-not-callable-or-member-not-found--2147352573)
@@ -29,6 +32,8 @@ superseded by a root cause, it is marked so rather than deleted.
 - ['Element not found' from EnsureDispatch or CastTo](#element-not-found-from-ensuredispatch-or-castto)
 - ['Unable to read write-only property' from GetCoords()](#unable-to-read-write-only-property-from-getcoords)
 - [SelectByID2 failed for a folder](#selectbyid2-failed-for-a-folder)
+- [AttributeError from GetCircleParams()](#attributeerror-from-getcircleparams)
+- [SaveAs or OpenDoc6 raises 'Type mismatch'](#saveas-or-opendoc6-raises-type-mismatch)
 
 **Session and connection**
 - [GetActiveObject raises 'Operation unavailable' but SLDWORKS.exe is running](#getactiveobject-raises-operation-unavailable-but-sldworksexe-is-running)
@@ -38,6 +43,7 @@ superseded by a root cause, it is marked so rather than deleted.
 
 **Wrong geometry, no error**
 - [A hole is in the wrong place but the sketch is fully defined and rebuilds clean](#a-hole-is-in-the-wrong-place-but-the-sketch-is-fully-defined-and-rebuilds-clean)
+- [Sketch geometry lands on the wrong global axis, or mirrored](#sketch-geometry-lands-on-the-wrong-global-axis-or-mirrored)
 - [AddDimension2 gave one diagonal dimension instead of H and V](#adddimension2-gave-one-diagonal-dimension-instead-of-h-and-v)
 - [ORIGIN selection picked up a dimension instead of the origin](#origin-selection-picked-up-a-dimension-instead-of-the-origin)
 - [An enum constant has an unexpected value](#an-enum-constant-has-an-unexpected-value)
@@ -247,6 +253,63 @@ re-entered across separate failed attempts never recovered.
 
 *Verified on: SW2026 SP1.1.*
 
+## CreateLine returns None for a horizontal line
+
+**Symptom.** `SketchManager.CreateLine(x1, y, z1, x2, y, z2)` returns `None`
+when both endpoints have exactly the same Y argument. Vertical and generic
+diagonal lines in the same sketch are created normally.
+
+**Cause.** Unknown. Isolated against a fresh document, so it is not the
+accumulated per-sketch state of the entry above. `CreateCenterRectangle` is not
+affected — its horizontal edges are created fine.
+
+**Fix.** Offset one endpoint's Y by 0.01 mm (`mm(0.01)`); the line is then
+created. That bakes a 10 µm slope into the sketch, so where the line is meant to
+be horizontal, add a Horizontal relation or a dimension afterwards rather than
+trusting the coordinate — that follow-up step has **not** been tested here.
+
+Remember Y here is the sketch argument, not global Y — see
+[where sketch coordinates land](api-recipes.md#where-sketch-coordinates-land).
+
+*Verified on: SW2026 SP1.1.*
+
+## InsertProtrusionSwept4 returns None for a line-plus-arc path
+
+**Symptom.** A sweep whose path is a `CreateLine` joined to a `Create3PointArc`
+returns `None`, even with the arc endpoint numerically identical to the line
+endpoint. Ruled out, each tried separately: arc radius (checked correct),
+`KeepTangency` on and off, an explicit profile sketch plus path sketch instead
+of `CircularProfile`, and clean round-number coordinates instead of computed
+ones. Arc-only, line-only, and line+line (sharp corner) paths all swept fine.
+
+**Cause.** Identical coordinates are not a topological connection.
+`Create3PointArc` and a separately created `CreateLine` are two independent
+entities whose endpoints merely overlap, so the path is not a connected chain.
+Why line+line *does* merge is not explained.
+
+**Fix.** Create each arc in a multi-segment path with **`CreateTangentArc`**,
+which starts from the previous entity's actual endpoint. The identical sweep
+succeeded immediately. Recipe in
+[api-recipes.md](api-recipes.md#sweep-paths-chain-arcs-with-createtangentarc).
+
+The same reasoning should apply to loft paths and guide curves; that is
+untested.
+
+*Verified on: SW2026 SP1.1.*
+
+## SaveBMP returns False and writes nothing
+
+**Symptom.** `doc.SaveBMP(path, width, height)` returns `False`, raises
+nothing, and no file appears.
+
+**Cause.** `path` was relative.
+
+**Fix.** Pass an absolute path: `doc.SaveBMP(os.path.abspath(path), w, h)`.
+Passing absolute paths to every file-taking call (`OpenDoc`, `SaveAs`) is the
+safe default; only `SaveBMP` has been confirmed to fail on a relative one.
+
+*Verified on: SW2026 SP1.1.*
+
 ---
 
 ## 'X' object is not callable, or 'Member not found' (-2147352573)
@@ -314,6 +377,51 @@ raises `SelectByID2 failed`.
 **Fix.** Folders need `Type="FTRFOLDER"`. `"BODYFEATURE"` is correct for regular
 features but not for folders. Full type-string table in
 [dispatch-quirks.md](dispatch-quirks.md#selectbyid2-type-strings).
+
+*Verified on: SW2026 SP1.1.*
+
+## AttributeError from GetCircleParams()
+
+**Symptom.** `edge.GetCurve.GetCircleParams()` raises `AttributeError`.
+
+**Cause.** No such method exists. Pattern-matching from the many `Get...`
+getters gives the wrong name here.
+
+**Fix.** Read the bare property **`CircleParams`** (no `Get`, no parens):
+
+```python
+cx, cy, cz, nx, ny, nz, r = edge.GetCurve.CircleParams   # centre, axis, radius; global, metres
+```
+
+`sw_helpers.circular_edges` wraps this for picking fillet edges.
+
+*Verified on: SW2026 SP1.1.*
+
+## SaveAs or OpenDoc6 raises 'Type mismatch'
+
+**Symptom.** `SaveAs(...)` raises `Type mismatch` when `ExportData`, `Errors`
+and `Warnings` are passed `None`. `sw.OpenDoc6(...)` raises `Type mismatch` with
+either `None` or `[0]` for `Errors` / `Warnings`.
+
+**Cause.** `Errors` and `Warnings` are `ByRef Long` out-parameters, and late
+binding does not marshal plain Python values into them — the same problem as
+[ActivateDoc2](#activatedoc2-raises-type-mismatch). See
+[dispatch-quirks.md](dispatch-quirks.md#byref-long-out-parameters).
+
+The session reported this as `IModelDoc2.SaveAs`. In the typelib, though, the
+6-arg form is `IModelDocExtension.SaveAs`, and `IModelDoc2.SaveAs` takes only
+`NewName`.
+
+**Fix.** Use the calls without out-parameters:
+
+- Save an already-named document in place: **`doc.Save()`**.
+- Open a document: **`sw.OpenDoc(os.path.abspath(path), doc_type)`**, where
+  `doc_type` comes from `swDocumentTypes_e` (resolve with
+  `constants_module()`). It returns the document, or `None` with no reason.
+
+No working form of SaveAs to a *new* name has been recorded yet. Untested
+candidate: `VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)` for `Errors` and
+`Warnings`, and `none_dispatch()` for `ExportData`, which is typed `IDispatch`.
 
 *Verified on: SW2026 SP1.1.*
 
@@ -412,6 +520,26 @@ This is the general lesson: a clean rebuild is necessary, not sufficient. There
 is no automated geometry check in this repo yet.
 
 *Verified on: SW2026 SP1.1.*
+
+## Sketch geometry lands on the wrong global axis, or mirrored
+
+**Symptom.** A feature has the right shape but sits in the wrong place: offsets
+end up along a different global axis than intended, or come out mirrored on one
+plane. A fillet edge match or face check computed in global coordinates finds
+nothing. The model rebuilds clean.
+
+**Cause.** `SketchManager.Create*(x, y, z, ...)` arguments are not global
+`(X, Y, Z)`. Measured on this install: on Front Plane, arg1 → global Y, arg2 →
+global Z, arg3 discarded. On Right Plane, arg1 → global **−X** (negated), arg2 →
+global Z, arg3 discarded.
+
+**Fix.** Map through the table in
+[api-recipes.md](api-recipes.md#where-sketch-coordinates-land), and re-measure
+with the circle-extrude-bounding-box probe described there before trusting it on
+a different template or on Top Plane. Values read back from the model
+(`GetPoint`, `CircleParams`) are global, so convert before comparing.
+
+*Verified on: SW2026 SP1.1 (Front and Right Plane only).*
 
 ## AddDimension2 gave one diagonal dimension instead of H and V
 
