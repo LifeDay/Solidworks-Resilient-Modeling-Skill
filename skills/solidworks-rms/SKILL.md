@@ -5,6 +5,12 @@ description: Build SolidWorks parts and assemblies via script using the Resilien
 
 # SolidWorks Resilient Modeling Strategy
 
+> **Paths.** Every file path in this skill (`scripts/...`, `references/...`,
+> `rms_check.py`, `capabilities.yaml`) is relative to this skill's base
+> directory — written `<skill dir>` below — not to the current working
+> directory, which is the user's project. Run scripts by their full path, e.g.
+> `python "<skill dir>/scripts/sw_preflight.py" --fix`.
+
 ## Why this exists
 
 A generated feature tree fails in a specific way. The geometry looks right, the user changes one dimension, and the tree collapses — because features reference whatever entity happened to be under the cursor when they were created, and nothing records what the model was supposed to mean.
@@ -27,7 +33,7 @@ Trusting that handle led to an exploratory `InsertSketch` call landing a stray
 sketch in the user's real document, and a later `CloseDoc` call — using a title
 captured earlier in the script — closing that same real, unsaved document.
 
-**Run `python scripts/sw_preflight.py --fix` before any build script.** It
+**Run `python "<skill dir>/scripts/sw_preflight.py" --fix` before any build script.** It
 confirms an attachable SolidWorks, lists the documents that were already open
 (pass these as `known_user_titles`), and clears the "Input dimension value"
 option whose modal dialog is the single most expensive failure in this repo's
@@ -132,7 +138,7 @@ The same logic applies one level up.
 Run the checker before declaring a model finished:
 
 ```
-python rms_check.py
+python "<skill dir>/rms_check.py"
 ```
 
 The checker audits the **feature tree**, not the geometry. A part with a wrong
@@ -141,7 +147,7 @@ a fully-defined sketch are necessary, not sufficient — this has bitten before.
 
 It connects to the running SolidWorks session, walks the active document, and reports per-rule PASS/FAIL. It also tests that each `4-Detail` feature suppresses individually without a rebuild error, which is the fastest way to catch a Detail-to-Detail reference that slipped through.
 
-First time against an unfamiliar part, run `python rms_check.py --dump-types` to print every feature's name and API type string. Feature type names vary across SolidWorks versions and the checker's classification sets at the top of the file may need calibrating against real parts.
+First time against an unfamiliar part, run `python "<skill dir>/rms_check.py" --dump-types` to print every feature's name and API type string. Feature type names vary across SolidWorks versions and the checker's classification sets at the top of the file may need calibrating against real parts.
 
 Report the checker output to the user. Do not describe a model as complete while a rule is failing.
 
@@ -174,6 +180,14 @@ Needing more than one or two exceptions on a part usually means the Core is wron
 `select_by_id2`, `last_feature`, `add_equation`, `wrap_in_folder` and
 `no_input_dim_dialog` ship in `scripts/sw_helpers.py`, and every recipe assumes
 them. Re-deriving them per script is how two SolidWorks crashes happened.
+
+Build scripts live in the user's project, so put the skill's `scripts` folder on
+`sys.path` by absolute path (or copy `sw_helpers.py` next to the build script):
+
+```python
+import sys; sys.path.insert(0, r"<skill dir>/scripts")
+from sw_helpers import connect, call0, select_by_id2, mm, no_input_dim_dialog
+```
 
 Verify signatures against the local SolidWorks API Help before relying on them;
 they shift between releases.

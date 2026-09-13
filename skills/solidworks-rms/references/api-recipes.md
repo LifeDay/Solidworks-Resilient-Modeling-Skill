@@ -9,10 +9,11 @@ re-confirm with the `gencache.EnsureModule` trick in
 [dispatch-quirks.md](dispatch-quirks.md#reading-a-real-signature-without-api-help)
 rather than trusting these across versions.
 
-Every sample assumes the helpers:
+Every sample assumes the helpers. `<skill dir>` is this skill's base directory;
+build scripts run from the user's project, so the path must be absolute:
 
 ```python
-import sys; sys.path.insert(0, "scripts")
+import sys; sys.path.insert(0, r"<skill dir>/scripts")
 from sw_helpers import (connect, call0, select_by_id2, last_feature,
                         add_equation, wrap_in_folder, no_input_dim_dialog, mm,
                         none_dispatch, circular_edges)
@@ -21,7 +22,7 @@ from sw_helpers import (connect, call0, select_by_id2, last_feature,
 ## Before anything: preflight
 
 ```
-python scripts/sw_preflight.py --fix
+python "<skill dir>/scripts/sw_preflight.py" --fix
 ```
 
 Confirms bitness, an attachable SolidWorks, and — critically — that the
@@ -416,5 +417,5 @@ Resolve against the constants typelib rather than hard-coding — these were
 `RefPlane`, `RefAxis`, `CoordSys`, `FtrFolder`.
 
 These vary by version and by how the feature was created. Run
-`python rms_check.py --dump-types` against known-good parts and adjust the
+`python "<skill dir>/rms_check.py" --dump-types` against known-good parts and adjust the
 classification sets at the top of the checker rather than trusting this list.

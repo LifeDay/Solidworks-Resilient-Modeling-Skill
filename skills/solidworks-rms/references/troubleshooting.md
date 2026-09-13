@@ -71,7 +71,7 @@ with no_input_dim_dialog(sw):       # scripts/sw_helpers.py
 
 This is an App-level global preference, not document-scoped, so restore it
 afterwards for the user's normal interactive work — the context manager does.
-`python scripts/sw_preflight.py --fix` checks and clears it before a build.
+`python "<skill dir>/scripts/sw_preflight.py" --fix` checks and clears it before a build.
 
 **If you find one already hung: do not kill the client.** Dismiss the dialog
 properly first (`EnumWindows` + `SetForegroundWindow` + `SendKeys("{ENTER}")`,
@@ -441,7 +441,7 @@ window to close.
 does its work in an invisible session. Clean it up: attach with `Dispatch`,
 confirm `GetDocuments` is empty and `Visible` is `False`, then call `ExitApp()`.
 
-`python scripts/sw_preflight.py` detects exactly this state by cross-checking
+`python "<skill dir>/scripts/sw_preflight.py"` detects exactly this state by cross-checking
 the process list against COM, and refuses to proceed.
 
 To avoid creating one: use `GetActiveObject` to attach-or-fail, and only
@@ -597,7 +597,7 @@ instead of PASS or FAIL.
 build, not `"Cut"`. `"ICE"` is now in the checker's `CUT_TYPES` and `HOLE_TYPES`,
 but a differently-created cut may still land outside the classification sets.
 
-**Fix.** Run `python rms_check.py --dump-types` against the part and add the
+**Fix.** Run `python "<skill dir>/rms_check.py" --dump-types` against the part and add the
 observed type strings to the sets at the top of the checker. Cosmetic only — it
 does not cause a false FAIL.
 

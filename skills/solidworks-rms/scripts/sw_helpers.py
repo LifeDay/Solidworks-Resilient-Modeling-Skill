@@ -7,7 +7,7 @@ than redefining `call0`, `none_dispatch`, `select_by_id2` and friends inline.
 Re-deriving them per script is how two SolidWorks crashes happened; import
 them instead.
 
-    import sys; sys.path.insert(0, "scripts")
+    import sys; sys.path.insert(0, r"<skill dir>/scripts")   # absolute, not cwd-relative
     from sw_helpers import connect, call0, select_by_id2, mm, no_input_dim_dialog
 
 Everything here is calibrated against SW2026 SP1.1 (rev 34.1.1) via plain
