@@ -1,0 +1,172 @@
+# pywin32 dynamic dispatch against SolidWorks
+
+How late binding behaves against this API, and why the obvious workarounds are
+wrong. Read this before writing any COM call; most of the entries in
+[troubleshooting.md](troubleshooting.md) are downstream of something here.
+
+Verified against **SW2026 SP1.1 (rev 34.1.1)** unless noted. Signatures and enum
+values shift between releases — see [capabilities.yaml](../capabilities.yaml) for
+what has actually been confirmed on which version.
+
+## Connecting
+
+```python
+import win32com.client
+
+sw = win32com.client.Dispatch("SldWorks.Application")
+sw.Visible = True
+model = sw.ActiveDoc
+```
+
+`Dispatch` gives late binding: every call is resolved by name at call time
+rather than against a known signature. That produces real behavioural quirks,
+not merely a performance difference.
+
+**`Dispatch` starts SolidWorks if it is not already running** — invisibly
+(`Visible` is `False`), holding a license seat, with no window to find. Worse,
+such an instance never registers in the COM running object table, so a later
+`GetActiveObject("SldWorks.Application")` raises `-2147221021 'Operation
+unavailable'` while the process sits there `Responding`. `Dispatch` *will*
+attach to it, so the next script silently does its work in an invisible
+session. To attach-or-fail honestly, use `GetActiveObject`; to clean up an
+orphan, attach with `Dispatch`, confirm `GetDocuments` is empty and `Visible`
+is `False`, then call `ExitApp()`. `scripts/sw_preflight.py` detects this state
+by cross-checking the process list against COM.
+
+## Zero-argument getters auto-invoke — call them without parentheses
+
+**This is the default, not the exception.** Every zero-arg `Get...`-style member
+tried on this build resolves on bare attribute access, even though API Help
+documents them as methods:
+
+`FirstFeature`, `GetNextFeature`, `GetEquationMgr`, `GetTitle`, `GetTypeName2`,
+`GetCount`, `GetConstrainedStatus`, `GetWhatsWrongCount`, `GetStartPoint2`,
+`GetEndPoint2`, `GetCenterPoint2`, `GetName`, `GetNameForSelection`,
+`GetDimension`, `ActiveSketch`, `GetSketchSegments`, `GetLength`,
+`EditRebuild3`, `GetFirstSubFeature`, `GetNextSubFeature`, `GetChildren`,
+`GetDefinition`, `GetSpecificFeature2`.
+
+Adding `()` raises `TypeError: 'X' object is not callable`, because the value is
+already resolved by the time you try to call it.
+
+**Try bare attribute access first for anything zero-arg; add `()` only if that
+raises `AttributeError`.** Known exception: `body.GetFaces()` and
+`body.GetEdges()` do *not* auto-invoke and need the parentheses.
+
+### Why a `callable()` check cannot fix this
+
+The tempting helper — get the attribute, and call it if it's callable — is
+wrong, and it is what other SolidWorks skills ship.
+
+A *resolved* `CDispatch` object is itself callable: it implements `__call__` for
+the "invoke this COM method" path. So `callable()` cannot distinguish "still
+needs calling" from "already resolved, calling it again is wrong". Calling an
+already-resolved value raises either `TypeError: 'X' object is not callable`
+(plain Python type) or COM `-2147352573 'Member not found'` (resolved
+`CDispatch`) — the same underlying mistake wearing two different errors.
+
+The correct zero-arg helper has no fallback call at all, and is shipped as
+`call0` in [`scripts/sw_helpers.py`](../scripts/sw_helpers.py):
+
+```python
+def call0(obj, name):
+    return getattr(obj, name)
+```
+
+## Typed nulls for optional Object parameters
+
+Multi-argument methods with an `Object`/`IDispatch` parameter reject a bare
+Python `None` with `DISP_E_TYPEMISMATCH` ("Type mismatch"). Wrap it:
+
+```python
+win32com.client.VARIANT(pythoncom.VT_DISPATCH, None)   # sw_helpers.none_dispatch()
+```
+
+Confirmed fix for `SelectByID2`'s `Callout` parameter; no other argument there
+needed explicit VARIANT typing.
+
+Some parameters are pickier still. `EquationMgr.Add3`'s trailing
+`ConfigurationName` rejects `None`, `""` *and* `[]`; it needs
+
+```python
+win32com.client.VARIANT(pythoncom.VT_EMPTY, None)      # sw_helpers.none_empty()
+```
+
+— at which point, on this build, `Add3` still just returns `-1`. See
+[troubleshooting.md](troubleshooting.md#add3-adds-no-equation-and-returns--1).
+
+## Early binding is a known-bad path
+
+`win32com.client.gencache.EnsureDispatch("SldWorks.Application")` — and
+`CastTo`, which calls it internally — fails with `Element not found` from
+`GetTypeInfo()` on essentially every live object tried on SW2026. **Stick with
+plain `Dispatch` for actual calls.** If a call returns `None` unexpectedly,
+suspect a wrong argument count/type or a misplaced method before reaching for
+early binding.
+
+## Reading a real signature without API Help
+
+Generate the typelib module directly by CLSID rather than through
+`EnsureDispatch`. This succeeds even where `EnsureDispatch` fails, and writes a
+readable `.py` into `gen_py` with real method names, argument order, and
+argument count — it just cannot itself be used for dispatch.
+
+```python
+win32com.client.gencache.EnsureModule(clsid, 0, major, minor)
+```
+
+Find CLSIDs with `win32com.client.selecttlb.EnumTlbs()`.
+
+| Typelib | CLSID | major/minor |
+|---|---|---|
+| SldWorks 2026 Type Library | `{83A33D31-27C5-11CE-BFD4-00400513BB57}` | 34 / 0 |
+| SOLIDWORKS 2026 Constant type library | `{4687F359-55D0-4CD3-B6CF-2EB42C11F989}` | 34 / 0 |
+
+Enum constants live in the **separate** constants typelib: `swEndConditions_e`,
+`swSelectType_e`, `swFeatureSuppressionAction_e`, `swConstrainedStatus_e`,
+`swInConfigurationOpts_e`, `swFeatureTreeFolderType_e`,
+`swUserPreferenceToggle_e`, `swUserPreferenceStringValue_e`, and the rest.
+
+**Resolve enum values against the installed constants typelib rather than a
+remembered integer.** `swDefaultTemplatePart` is `8` here, not the `4` that was
+assumed; `swConstrainedStatus_e` is `1`=unknown, `2`=under, `3`=fully,
+`4`=over, not the `1/2/3` originally guessed.
+`sw_helpers.constants_module()` wraps this.
+
+## Units
+
+All lengths in the API are **metres** and all angles **radians**, regardless of
+document units. `sw_helpers.mm()` and `sw_helpers.deg()` convert.
+
+## Method-location surprises
+
+None of these are guessable by pattern-matching from nearby calls — each "looks
+right" and is wrong:
+
+- **`InsertSketch2` does not exist** via dynamic dispatch on `SketchManager` on
+  this build. Use `InsertSketch(bool)` — same effect, toggles sketch edit mode.
+- **`InsertAxis2(AutoSize)` lives on `IModelDoc2`**, not on `FeatureManager`,
+  despite every other feature-creation call living on `FeatureManager`.
+- **`AddDimension2(x, y, z)` lives on `IModelDoc2`**, not on
+  `ModelDocExtension` — easy to guess wrong, since `SelectByID2` and
+  `GetWhatsWrongCount` both live on `Extension`.
+
+## `SelectByID2` type strings
+
+The `Type` string is its own small vocabulary, unrelated to `GetTypeName2()`:
+
+| To select | Type string |
+|---|---|
+| A feature | `"BODYFEATURE"` — not `GetTypeName2()`'s value (e.g. `"Extrusion"`), not `"FEAT"`, not `""` |
+| A feature-tree folder | `"FTRFOLDER"` — `"BODYFEATURE"` raises `SelectByID2 failed` |
+| A sketch | `"SKETCH"` |
+| A reference plane | `"PLANE"` |
+| The sketch origin | `"ORIGIN"`, with an **empty** name — this is type/coordinate based, not name based |
+
+`ext.SelectByID2("", "ORIGIN", 0, 0, 0, append, 0, none_dispatch(), 0)` is
+coordinate-driven, so in a sketch cluttered with overlapping prior test
+dimensions it can pick up a *dimension* (`swSelDIMENSIONS`, type `14`) instead
+of the origin point (`swSelSKETCHPOINTS`, type `11`). Check
+`doc.SelectionManager.GetSelectedObjectType3(index, -1)` when a
+selection-dependent call mysteriously returns `None`; in practice the fix was
+working in a fresh, uncluttered sketch.

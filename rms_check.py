@@ -16,8 +16,8 @@ GetDefinition, GetSpecificFeature2, FirstFeature, GetFirstSubFeature,
 GetNextSubFeature) were switched from `.Method()` to bare `.Method` after
 confirming against a live SW2026 SP1.1 session that dynamic dispatch
 auto-invokes these on attribute access and that calling the resolved value
-again raises 'Member not found' or TypeError - see api-notes.md's "Session
-log" section. The swConstrainedStatus_e values below were also corrected
+again raises 'Member not found' or TypeError - see
+references/dispatch-quirks.md. The swConstrainedStatus_e values below were also corrected
 against the live constants typelib (1=unknown, 2=under, 3=fully, 4=over -
 NOT 1/2/3 as originally guessed). The feature-type classification sets
 below are still the most likely remaining thing to need adjustment for a
@@ -47,15 +47,24 @@ FOLDER_TYPE = "FtrFolder"
 SKETCH_TYPES = {"ProfileFeature", "3DProfileFeature"}
 
 # Features that create solid material. Banned from 1-Ref and 2-Construction.
+# "ICE" also appears in CUT_TYPES/HOLE_TYPES below: on SW2026 it is what a
+# FeatureCut4 cut reports, but it was already listed here from an earlier
+# calibration pass, so it may cover more than one feature kind on some builds.
+# The overlap is harmless - the only rule reading both reads their union - but
+# if a part built here trips a wrong rule, run --dump-types and split them.
 SOLID_TYPES = {
     "Extrusion", "Revolution", "Sweep", "Loft", "Boss", "Thicken",
     "BaseFlange", "Boundary", "ImportedFeature", "ICE",
 }
 
-# Features that remove material.
-CUT_TYPES = {"Cut", "CutRevolve", "SweepCut", "LoftCut", "Hole", "HoleWzd", "SimpleHole"}
+# Features that remove material. "ICE" is what a FeatureCut4-created cut reports
+# as GetTypeName2 on SW2026 SP1.1 - not "Cut". It is deliberately in both sets:
+# cuts built by this skill's recipe are functionally holes, and leaving it out of
+# HOLE_TYPES made detail.holes_last report SKIP on an all-cut 4-Detail folder.
+CUT_TYPES = {"Cut", "CutRevolve", "SweepCut", "LoftCut", "Hole", "HoleWzd",
+             "SimpleHole", "ICE"}
 
-HOLE_TYPES = {"HoleWzd", "SimpleHole", "Hole"}
+HOLE_TYPES = {"HoleWzd", "SimpleHole", "Hole", "ICE"}
 FILLET_TYPES = {"Fillet"}
 CHAMFER_TYPES = {"Chamfer"}
 SHELL_TYPES = {"Shell"}

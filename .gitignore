@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+
+# Approved RMS rule waivers are per-model, not repo state.
+rms_exceptions.json
+
+# SolidWorks working files
+*.SLDPRT
+*.SLDASM
+*.SLDDRW
+~$*

@@ -1,0 +1,200 @@
+# capabilities.yaml - what this skill has actually been verified to do, and where.
+#
+# The point of this file is to stop "it should work" being reported as "it works".
+# Before promising a capability, check it here. If the user's SolidWorks version
+# is not in verified_versions, say so rather than asserting.
+#
+# level:
+#   verified     driven end-to-end against a live session, zero rebuild errors
+#   pilot        worked once or partially; treat results as needing human review
+#   unverified   never tried here - no claim either way
+#   broken       tried and confirmed not to work on the listed versions
+#
+# Findings so far come from a single machine: SW2026 SP1.1 (rev 34.1.1),
+# Academic licence, Windows 11, pywin32, late-bound Dispatch. Nothing has been
+# tested on a second SolidWorks version, so "verified" here means "verified on
+# 2026 SP1.1" and nothing stronger. Add versions as they are confirmed.
+
+meta:
+  verified_on:
+    - version: "2026 SP1.1"
+      revision: "34.1.1"
+      notes: "Academic licence. The only install these findings come from."
+  python: "64-bit, pywin32, win32com.client.Dispatch (late binding)"
+
+capabilities:
+
+  - id: connect_session
+    label: Attach to a running SolidWorks session
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      GetActiveObject attaches or fails honestly. Dispatch launches an invisible
+      instance that never registers in the ROT - use sw_preflight.py, which
+      detects that state by cross-checking the process list.
+    reference: references/troubleshooting.md#getactiveobject-raises-operation-unavailable-but-sldworksexe-is-running
+
+  - id: dispatch_zero_arg_getters
+    label: Reading zero-argument COM getters
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      Bare attribute access, no parens. body.GetFaces()/GetEdges() are the known
+      exceptions. A callable()-based wrapper cannot work; use sw_helpers.call0.
+    reference: references/dispatch-quirks.md
+
+  - id: early_binding
+    label: Early binding via gencache.EnsureDispatch
+    level: broken
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      Fails with 'Element not found' from GetTypeInfo() on essentially every live
+      object. EnsureModule for reading signatures still works.
+    reference: references/troubleshooting.md#element-not-found-from-ensuredispatch-or-castto
+
+  - id: sketch_rectangle
+    label: Center rectangle on a default plane, fully defined
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      CreateCenterRectangle returns 6 segments (4 edges + 2 construction
+      diagonals). One corner-point-to-origin dimension fully constrains it.
+      Dimensioning the line entities directly is unsafe.
+    reference: references/api-recipes.md#fully-defining-a-center-rectangle-with-one-dimension
+
+  - id: sketch_circle
+    label: Circle by radius, centered on a reference point
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      Use GetCenterPoint2, not GetStartPoint2. The wrong point produces a
+      fully-defined sketch and a clean rebuild with wrong geometry.
+    reference: references/troubleshooting.md#a-hole-is-in-the-wrong-place-but-the-sketch-is-fully-defined-and-rebuilds-clean
+
+  - id: extrude_boss
+    label: Boss extrude from a sketch
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: "FeatureExtrusion3, 23 positional args. Dir=False works here."
+    reference: references/api-recipes.md#base-plate-sketch-on-a-default-plane-then-extrude
+
+  - id: extrude_cut
+    label: Sketch-based cut
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      FeatureCut4, 27 positional args. Dir MUST be True - every Dir=False
+      combination returns None. Resulting features report GetTypeName2 == "ICE".
+    reference: references/troubleshooting.md#featurecut--featurecut4-returns-none
+
+  - id: fillet_constant_radius
+    label: Constant-radius edge fillet
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      FeatureFillet3, 14 args, Options=2 (uniform radius) - not 0. Select edges by
+      iterating body.GetEdges() and filtering; coordinate-guess picks are flaky.
+    reference: references/troubleshooting.md#featurefillet3-returns-none
+
+  - id: equation_add
+    label: Global variables and equation-driven dimensions
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      Add2 only. Add3 silently fails - returns -1, raises nothing, adds nothing,
+      independent of ConfigurationOption. Always verify GetCount incremented.
+    reference: references/troubleshooting.md#add3-adds-no-equation-and-returns--1
+
+  - id: feature_folders
+    label: Grouping features into named tree folders
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      InsertFeatureTreeFolder2(2) wraps the current selection. Create each folder
+      as its group completes. MoveToFolder does not work - dissolve and re-wrap.
+    reference: references/api-recipes.md#wrapping-a-groups-features-in-a-folder
+
+  - id: feature_descriptions
+    label: Writing design intent to Feature.Description
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: "Read/write property. User must enable Tree Display > Show Feature Descriptions."
+
+  - id: tree_traversal
+    label: Walking the feature tree and parent/child graph
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      FirstFeature/GetNextFeature. Folders emit a synthetic ___EndTag___ marker.
+      GetParents is absent in some releases; degrade to GetChildren in reverse.
+
+  - id: suppression_test
+    label: Per-feature suppress/rebuild/restore testing
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: "Always restore suppression state, including on exception."
+
+  - id: rms_check
+    label: RMS compliance checking of a part
+    level: verified
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      rms_check.py. Feature-type classification sets need calibrating per version -
+      run --dump-types first. Validates tree structure only, never geometry.
+
+  - id: dimension_scripting
+    label: Scripted dimensioning
+    level: pilot
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      Works, but only with "Input dimension value" disabled and in sketches built
+      in one continuous pass. A sketch that absorbs repeated failed dimension
+      attempts can become permanently unable to accept new ones, with no known
+      cause or repair beyond deleting and rebuilding it.
+    reference: references/troubleshooting.md#addhorizontaldimension2-returns-none-for-every-entity-in-one-sketch
+
+  - id: long_running_scripts
+    label: Long single-process build scripts
+    level: pilot
+    verified_versions: ["2026 SP1.1"]
+    notes: >
+      Two SolidWorks crashes occurred partway through long continuous runs; short
+      single-purpose scripts run as separate processes never crashed. Prefer
+      splitting a build into stages. Root cause unknown.
+    reference: references/troubleshooting.md#a-long-script-crashes-solidworks-partway-through
+
+  - id: geometry_verification
+    label: Verifying that produced geometry is actually correct
+    level: unverified
+    notes: >
+      No automated check exists. A clean rebuild and a fully-defined sketch do not
+      prove correct geometry - confirmed by a real case. Face counting via
+      body.GetFaces() is the only manual technique used so far.
+
+  # Not attempted here. Listed so the skill says "unverified" rather than guessing.
+  - id: assemblies
+    label: Assembly creation, component insertion, mates
+    level: unverified
+    notes: "SKILL.md's assembly guidance is reasoned from the part rules, not tested."
+
+  - id: drawings
+    label: Engineering drawing generation
+    level: unverified
+
+  - id: design_tables
+    label: Part families driven by a design table
+    level: unverified
+    notes: "SKILL.md prescribes this approach for part families; never exercised."
+
+  - id: export_formats
+    label: STEP / STL / PDF export
+    level: unverified
+
+  - id: sheet_metal
+    label: Sheet metal features and flat patterns
+    level: unverified
+
+  - id: surfacing
+    label: Surface bodies and 2-Construction geometry
+    level: unverified
+    notes: "The RMS group exists for it; no surfacing call has been driven here."

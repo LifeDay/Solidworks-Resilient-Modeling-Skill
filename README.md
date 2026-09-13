@@ -7,8 +7,18 @@ A Claude Code skill for SolidWorks modeling: it teaches Claude to build parts an
 | File | Purpose |
 |---|---|
 | [SKILL.md](SKILL.md) | The skill definition Claude Code loads: the six-folder feature-tree structure, parameterization rules, sketch and selection policy, naming conventions, and escape-hatch process. |
-| [api-notes.md](api-notes.md) | SolidWorks API (pywin32) reference for the calls the skill and checker depend on — folders, `EquationMgr`, feature descriptions, traversal, suppression testing, sketch constraint status. Signatures shift between SolidWorks releases; verify against the local API Help. |
+| [api-notes.md](api-notes.md) | Index into the API references below, plus the five findings that cost the most time. |
+| [references/troubleshooting.md](references/troubleshooting.md) | **Symptom → cause → fix**, keyed by the error string or behaviour you actually have in hand. Start here when something breaks. |
+| [references/api-recipes.md](references/api-recipes.md) | Sequences confirmed end-to-end against a live session, with real positional signatures. |
+| [references/dispatch-quirks.md](references/dispatch-quirks.md) | How pywin32 late binding behaves against this API — auto-invoking getters, typed nulls, reading signatures from the typelib. |
+| [scripts/sw_helpers.py](scripts/sw_helpers.py) | The COM helpers every recipe assumes: `call0`, `none_dispatch`, `select_by_id2`, `add_equation`, `wrap_in_folder`, `no_input_dim_dialog`, plus the live-session safety guards. |
+| [scripts/sw_preflight.py](scripts/sw_preflight.py) | Environment check to run before any build script. |
+| [capabilities.yaml](capabilities.yaml) | What has actually been verified, and on which SolidWorks version. |
 | [rms_check.py](rms_check.py) | A standalone checker that connects to a running SolidWorks session and audits the active document against the RMS rules. |
+
+Signatures and enum values shift between SolidWorks releases. Everything here
+was confirmed against **SW2026 SP1.1** on one machine; verify against the local
+API Help before relying on it elsewhere.
 
 ## What RMS gives you
 
@@ -35,6 +45,21 @@ Clone this repo's contents into your Claude Code skills directory (`~/.claude/sk
 
 Either way, the skill activates automatically for SolidWorks modeling work — writing or editing macros that create geometry, driving SolidWorks via MCP, reviewing an existing feature tree, or building a part family — even if you don't say "RMS" explicitly.
 
+## Before running anything
+
+```
+python scripts/sw_preflight.py --fix
+```
+
+Checks Python bitness, `pywin32`, and an attachable SolidWorks; lists the
+documents that were already open; and clears the **"Input dimension value"**
+system option, whose modal dialog makes scripted dimensioning appear to hang and
+can leave the session in a state where the next save crashes SolidWorks.
+
+It deliberately will not start SolidWorks (`--launch` opts in) — and it detects
+the orphaned invisible instance a previous script's `Dispatch` call may have
+left holding a license seat.
+
 ## Verifying a model
 
 With the target part or assembly open and active in SolidWorks:
@@ -42,6 +67,9 @@ With the target part or assembly open and active in SolidWorks:
 ```
 python rms_check.py
 ```
+
+This audits the **feature tree**, not the geometry — a part with a mis-centered
+hole passes every rule. Zero rebuild errors is necessary, not sufficient.
 
 This walks the feature tree and reports PASS/FAIL per rule, including a per-feature suppression test for every `4-Detail` feature (the fastest way to catch a Detail-to-Detail reference that slipped through).
 

@@ -27,6 +27,13 @@ Trusting that handle led to an exploratory `InsertSketch` call landing a stray
 sketch in the user's real document, and a later `CloseDoc` call — using a title
 captured earlier in the script — closing that same real, unsaved document.
 
+**Run `python scripts/sw_preflight.py --fix` before any build script.** It
+confirms an attachable SolidWorks, lists the documents that were already open
+(pass these as `known_user_titles`), and clears the "Input dimension value"
+option whose modal dialog is the single most expensive failure in this repo's
+history. It refuses to start SolidWorks itself, and detects the orphaned
+headless instance that a previous script's `Dispatch` call may have left behind.
+
 Rules, not suggestions:
 
 - **Never call a destructive or mutating method** (`CloseDoc`, `QuitDoc`,
@@ -42,6 +49,9 @@ Rules, not suggestions:
   at creation, and **assert `doc.GetTitle not in known_user_titles`** before any
   call that mutates or closes it. Do not proceed on an assumption that a "new"
   document call actually created something new.
+
+`scripts/sw_helpers.py` ships `assert_scratch_doc` and `safe_close`, which
+enforce exactly these rules. Use them rather than hand-rolling the check.
 
 ## The six groups
 
@@ -125,6 +135,10 @@ Run the checker before declaring a model finished:
 python rms_check.py
 ```
 
+The checker audits the **feature tree**, not the geometry. A part with a wrong
+dimension or a mis-centered hole passes every rule here. Zero rebuild errors and
+a fully-defined sketch are necessary, not sufficient — this has bitten before.
+
 It connects to the running SolidWorks session, walks the active document, and reports per-rule PASS/FAIL. It also tests that each `4-Detail` feature suppresses individually without a rebuild error, which is the fastest way to catch a Detail-to-Detail reference that slipped through.
 
 First time against an unfamiliar part, run `python rms_check.py --dump-types` to print every feature's name and API type string. Feature type names vary across SolidWorks versions and the checker's classification sets at the top of the file may need calibrating against real parts.
@@ -148,4 +162,39 @@ Needing more than one or two exceptions on a part usually means the Core is wron
 
 ## API notes
 
-See `api-notes.md` for the SolidWorks API calls this skill depends on — folders, equations, descriptions, suppression, parent/child traversal, and sketch constraint status. Verify signatures against the local SolidWorks API Help before relying on them; they shift between releases.
+`api-notes.md` indexes the API knowledge this skill depends on:
+
+- **`references/troubleshooting.md`** — symptom → cause → fix. Go here first
+  when something returns `None`, raises, hangs, or produces wrong geometry.
+- **`references/api-recipes.md`** — sequences confirmed end-to-end, with real
+  positional signatures.
+- **`references/dispatch-quirks.md`** — how pywin32 late binding behaves here.
+
+**Do not re-derive the COM helpers.** `call0`, `none_dispatch`,
+`select_by_id2`, `last_feature`, `add_equation`, `wrap_in_folder` and
+`no_input_dim_dialog` ship in `scripts/sw_helpers.py`, and every recipe assumes
+them. Re-deriving them per script is how two SolidWorks crashes happened.
+
+Verify signatures against the local SolidWorks API Help before relying on them;
+they shift between releases.
+
+## Saying what is actually verified
+
+`capabilities.yaml` records what has been driven against a real session, and on
+which SolidWorks version. **Check it before promising a capability.** Findings
+so far come from a single install (SW2026 SP1.1), so `verified` there means
+"verified on 2026 SP1.1" and nothing stronger.
+
+If the user's version is not listed, or the capability is `unverified`, say so
+plainly and proceed as an experiment — do not present untested behaviour as
+known-good. When something new is confirmed or refuted, add it to the ledger and
+to `references/troubleshooting.md` rather than leaving it in conversation.
+
+Two standing limits worth stating to the user up front:
+
+- **A clean rebuild does not prove correct geometry.** `rms_check.py` validates
+  tree structure only. Confirm shape another way — face counts, or the user's
+  own eyes on the model.
+- **Assemblies, drawings, design tables, sheet metal and surfacing are
+  unverified here.** The guidance for them is reasoned from the part rules, not
+  tested.
