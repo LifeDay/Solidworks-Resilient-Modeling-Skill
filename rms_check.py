@@ -10,9 +10,18 @@ reports per-rule PASS / FAIL / WARN.
     python rms_check.py --no-suppress      # skip the suppression test (faster, non-mutating)
     python rms_check.py --exceptions rms_exceptions.json
 
-STATUS: written against the SolidWorks 2026 COM API but NOT yet validated against
-a live session. The feature-type classification sets below are the most likely
-thing to need adjustment - run --dump-types on known-good parts and calibrate.
+STATUS: zero-arg getter calls (GetTypeName2, GetNextFeature, GetChildren,
+GetConstrainedStatus, GetEquationMgr, GetCount, GetWhatsWrongCount, GetTitle,
+GetDefinition, GetSpecificFeature2, FirstFeature, GetFirstSubFeature,
+GetNextSubFeature) were switched from `.Method()` to bare `.Method` after
+confirming against a live SW2026 SP1.1 session that dynamic dispatch
+auto-invokes these on attribute access and that calling the resolved value
+again raises 'Member not found' or TypeError - see api-notes.md's "Session
+log" section. The swConstrainedStatus_e values below were also corrected
+against the live constants typelib (1=unknown, 2=under, 3=fully, 4=over -
+NOT 1/2/3 as originally guessed). The feature-type classification sets
+below are still the most likely remaining thing to need adjustment for a
+new SW version - run --dump-types on known-good parts and calibrate.
 """
 
 import argparse
@@ -119,10 +128,10 @@ def walk(model):
     the same way it skips real folders - do not special-case it away.
     """
     out = []
-    feat = model.FirstFeature()
+    feat = model.FirstFeature
     current_group = None
     while feat:
-        tname = feat.GetTypeName2()
+        tname = feat.GetTypeName2
         name = feat.Name
         if tname == FOLDER_TYPE and name in GROUP_INDEX:
             current_group = name
@@ -131,20 +140,20 @@ def walk(model):
                 out.append((sub, name, 1))
         else:
             out.append((feat, current_group, 0))
-        feat = feat.GetNextFeature()
+        feat = feat.GetNextFeature
     return out
 
 
 def subfeatures(folder):
     """Yield features inside a folder, tolerating version differences."""
     try:
-        sub = folder.GetFirstSubFeature()
+        sub = folder.GetFirstSubFeature
     except Exception:
         return
     while sub:
         yield sub
         try:
-            sub = sub.GetNextSubFeature()
+            sub = sub.GetNextSubFeature
         except Exception:
             return
 
@@ -172,7 +181,7 @@ def is_content(tname, name):
 # --------------------------------------------------------------------------
 
 def check_folders(entries, rep):
-    found = [g for f, g, d in entries if f.GetTypeName2() == FOLDER_TYPE and d == 0 and g]
+    found = [g for f, g, d in entries if f.GetTypeName2 == FOLDER_TYPE and d == 0 and g]
     seen = [g for g in GROUPS if g in found]
     missing = [g for g in GROUPS if g not in found]
     if missing:
@@ -187,7 +196,7 @@ def check_folders(entries, rep):
 
 def check_grouping(entries, rep):
     loose = [f.Name for f, g, d in entries
-             if g is None and is_content(f.GetTypeName2(), f.Name)]
+             if g is None and is_content(f.GetTypeName2, f.Name)]
     rep.add("grouping.all_features_in_a_group",
             "PASS" if not loose else "FAIL",
             "" if not loose else "ungrouped: " + ", ".join(loose[:8]))
@@ -196,15 +205,15 @@ def check_grouping(entries, rep):
 def check_no_solids_in_ref(entries, rep):
     bad = [f.Name for f, g, d in entries
            if g in ("1-Ref", "2-Construction")
-           and f.GetTypeName2() in (SOLID_TYPES | CUT_TYPES)]
+           and f.GetTypeName2 in (SOLID_TYPES | CUT_TYPES)]
     rep.add("groups.no_solids_in_ref_or_construction",
             "PASS" if not bad else "FAIL",
             "" if not bad else ", ".join(bad))
 
 
 def check_shell_last_in_core(entries, rep):
-    core = [f for f, g, d in entries if g == "3-Core" and f.GetTypeName2() != FOLDER_TYPE]
-    shells = [i for i, f in enumerate(core) if f.GetTypeName2() in SHELL_TYPES]
+    core = [f for f, g, d in entries if g == "3-Core" and f.GetTypeName2 != FOLDER_TYPE]
+    shells = [i for i, f in enumerate(core) if f.GetTypeName2 in SHELL_TYPES]
     if not shells:
         rep.add("core.shell_last", "SKIP", "no shell feature")
     elif max(shells) == len(core) - 1:
@@ -215,8 +224,8 @@ def check_shell_last_in_core(entries, rep):
 
 
 def check_holes_last_in_detail(entries, rep):
-    detail = [f for f, g, d in entries if g == "4-Detail" and f.GetTypeName2() != FOLDER_TYPE]
-    holes = [i for i, f in enumerate(detail) if f.GetTypeName2() in HOLE_TYPES]
+    detail = [f for f, g, d in entries if g == "4-Detail" and f.GetTypeName2 != FOLDER_TYPE]
+    holes = [i for i, f in enumerate(detail) if f.GetTypeName2 in HOLE_TYPES]
     if not holes:
         rep.add("detail.holes_last", "SKIP", "no hole features")
         return
@@ -226,12 +235,12 @@ def check_holes_last_in_detail(entries, rep):
 
 
 def check_quarantine_order(entries, rep):
-    q = [f for f, g, d in entries if g == "6-Quarantine" and f.GetTypeName2() != FOLDER_TYPE]
+    q = [f for f, g, d in entries if g == "6-Quarantine" and f.GetTypeName2 != FOLDER_TYPE]
     if not q:
         rep.add("quarantine.order", "SKIP", "empty")
         return
 
-    kinds = [f.GetTypeName2() for f in q]
+    kinds = [f.GetTypeName2 for f in q]
     last_chamfer = max([i for i, k in enumerate(kinds) if k in CHAMFER_TYPES] or [-1])
     first_fillet = min([i for i, k in enumerate(kinds) if k in FILLET_TYPES] or [len(q)])
     rep.add("quarantine.chamfers_before_fillets",
@@ -239,10 +248,10 @@ def check_quarantine_order(entries, rep):
 
     radii = []
     for f in q:
-        if f.GetTypeName2() not in FILLET_TYPES:
+        if f.GetTypeName2 not in FILLET_TYPES:
             continue
         try:
-            data = f.GetDefinition()
+            data = f.GetDefinition
             radii.append(data.DefaultRadius)
         except Exception:
             radii.append(None)
@@ -254,18 +263,18 @@ def check_quarantine_order(entries, rep):
         rep.add("quarantine.largest_fillet_first", "PASS" if ok else "FAIL",
                 "" if ok else "radii: " + ", ".join("{:.4g}".format(r * 1000) for r in known))
 
-    strays = [f.Name for f in q if f.GetTypeName2() not in (FILLET_TYPES | CHAMFER_TYPES)]
+    strays = [f.Name for f in q if f.GetTypeName2 not in (FILLET_TYPES | CHAMFER_TYPES)]
     rep.add("quarantine.only_fillets_and_chamfers",
             "PASS" if not strays else "FAIL",
             "" if not strays else ", ".join(strays))
 
 
 def check_modify_order(entries, rep):
-    m = [f for f, g, d in entries if g == "5-Modify" and f.GetTypeName2() != FOLDER_TYPE]
+    m = [f for f, g, d in entries if g == "5-Modify" and f.GetTypeName2 != FOLDER_TYPE]
     if not m:
         rep.add("modify.transform_before_replicate", "SKIP", "empty")
         return
-    kinds = [f.GetTypeName2() for f in m]
+    kinds = [f.GetTypeName2 for f in m]
     last_draft = max([i for i, k in enumerate(kinds) if k in DRAFT_TYPES] or [-1])
     first_pat = min([i for i, k in enumerate(kinds) if k in PATTERN_TYPES] or [len(m)])
     rep.add("modify.transform_before_replicate",
@@ -284,10 +293,10 @@ def check_reference_direction(model, entries, rep):
     quarantine_parents = []
 
     for feat, group, depth in entries:
-        if group is None or feat.GetTypeName2() == FOLDER_TYPE:
+        if group is None or feat.GetTypeName2 == FOLDER_TYPE:
             continue
         try:
-            children = feat.GetChildren()
+            children = feat.GetChildren
         except Exception:
             children = None
         if not children:
@@ -319,7 +328,7 @@ def check_detail_internal_refs(entries, rep):
     for feat, group, depth in entries:
         if group != "4-Detail":
             continue
-        if feat.GetTypeName2() == FOLDER_TYPE and feat.Name != "4-Detail":
+        if feat.GetTypeName2 == FOLDER_TYPE and feat.Name != "4-Detail":
             for sub in subfeatures(feat):
                 subfolder_members.add(sub.Name)
             continue
@@ -327,10 +336,10 @@ def check_detail_internal_refs(entries, rep):
 
     bad = []
     for feat, group, depth in entries:
-        if group != "4-Detail" or feat.GetTypeName2() == FOLDER_TYPE:
+        if group != "4-Detail" or feat.GetTypeName2 == FOLDER_TYPE:
             continue
         try:
-            children = feat.GetChildren() or []
+            children = feat.GetChildren or []
         except Exception:
             children = []
         for child in children:
@@ -347,9 +356,9 @@ def check_detail_internal_refs(entries, rep):
 def check_descriptions(entries, rep):
     missing = []
     for feat, group, depth in entries:
-        if feat.GetTypeName2() == FOLDER_TYPE:
+        if feat.GetTypeName2 == FOLDER_TYPE:
             continue
-        if not is_content(feat.GetTypeName2(), feat.Name):
+        if not is_content(feat.GetTypeName2, feat.Name):
             continue
         try:
             desc = feat.Description
@@ -367,20 +376,23 @@ def check_sketches(entries, rep):
     over = []
     consumers = {}
     for feat, group, depth in entries:
-        if feat.GetTypeName2() not in SKETCH_TYPES:
+        if feat.GetTypeName2 not in SKETCH_TYPES:
             continue
         try:
-            sk = feat.GetSpecificFeature2()
-            status = sk.GetConstrainedStatus()
+            sk = feat.GetSpecificFeature2
+            status = sk.GetConstrainedStatus
         except Exception:
             continue
-        # swConstrainedStatus_e: 1 = under defined, 2 = fully defined, 3 = over defined
-        if status == 1:
+        # swConstrainedStatus_e (confirmed against the live constants typelib on
+        # SW2026 SP1.1 - do not trust a remembered value, re-verify per version):
+        # 1 = swUnknownConstraint, 2 = swUnderConstrained, 3 = swFullyConstrained,
+        # 4 = swOverConstrained (5-7 are solver-error states, treated as over/bad here).
+        if status in (1, 2):
             under.append(feat.Name)
-        elif status >= 3:
+        elif status >= 4:
             over.append(feat.Name)
         try:
-            kids = feat.GetChildren() or []
+            kids = feat.GetChildren or []
         except Exception:
             kids = []
         consumers[feat.Name] = len([k for k in kids if getattr(k, "Name", None)])
@@ -399,8 +411,8 @@ def check_sketches(entries, rep):
 
 def check_parameterization(model, rep):
     try:
-        eq = model.GetEquationMgr()
-        count = eq.GetCount()
+        eq = model.GetEquationMgr
+        count = eq.GetCount
     except Exception:
         rep.add("params.global_variables_present", "SKIP", "EquationMgr unavailable")
         return
@@ -424,7 +436,7 @@ def check_detail_suppression(model, entries, rep):
     """Each 4-Detail feature must suppress individually without a rebuild error."""
     ext = model.Extension
     targets = [f for f, g, d in entries
-               if g == "4-Detail" and f.GetTypeName2() != FOLDER_TYPE]
+               if g == "4-Detail" and f.GetTypeName2 != FOLDER_TYPE]
     if not targets:
         rep.add("detail.individually_suppressible", "SKIP", "no detail features")
         return
@@ -437,7 +449,7 @@ def check_detail_suppression(model, entries, rep):
         try:
             feat.SetSuppression2(SUPPRESS, THIS_CONFIG, None)
             model.ForceRebuild3(False)
-            if ext.GetWhatsWrongCount() > 0:
+            if ext.GetWhatsWrongCount > 0:
                 failures.append(feat.Name)
         except Exception as exc:
             failures.append("{} ({})".format(feat.Name, exc))
@@ -465,7 +477,7 @@ def dump_types(entries):
     print("  {:<10} {:<34} {}".format("GROUP", "FEATURE", "API TYPE"))
     for feat, group, depth in entries:
         print("  {:<10} {:<34} {}".format(
-            group or "-", ("  " * depth) + feat.Name, feat.GetTypeName2()))
+            group or "-", ("  " * depth) + feat.Name, feat.GetTypeName2))
     print("")
 
 
@@ -484,7 +496,7 @@ def main():
     if model is None:
         sys.exit("No active SolidWorks document.")
 
-    print("\n  Document: {}".format(model.GetTitle()))
+    print("\n  Document: {}".format(model.GetTitle))
 
     entries = walk(model)
 
