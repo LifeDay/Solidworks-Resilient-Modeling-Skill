@@ -11,16 +11,32 @@ what has actually been confirmed on which version.
 ## Connecting
 
 ```python
-import win32com.client
-
-sw = win32com.client.Dispatch("SldWorks.Application")
-sw.Visible = True
+from sw_helpers import connect
+sw = connect()          # attach-or-fail, with late binding forced
 model = sw.ActiveDoc
 ```
 
-`Dispatch` gives late binding: every call is resolved by name at call time
-rather than against a known signature. That produces real behavioural quirks,
-not merely a performance difference.
+which is:
+
+```python
+import win32com.client
+from win32com.client import dynamic
+
+app = win32com.client.GetActiveObject("SldWorks.Application")
+sw = dynamic.Dispatch(app._oleobj_)
+```
+
+Everything on this page assumes **late binding**: every call is resolved by
+name at call time rather than against a known signature. That produces real
+behavioural quirks, not merely a performance difference.
+
+Plain `win32com.client.Dispatch` and `GetActiveObject` give late binding only
+while no generated module for the SldWorks typelib is cached; see
+[a gen_py cache silently switches to early binding](#a-gen_py-cache-silently-switches-to-early-binding).
+`dynamic.Dispatch` gives it unconditionally. Objects returned by calls on a
+late-bound parent are late-bound too, because pywin32's `dynamic.CDispatch`
+wraps return values with `dynamic.Dispatch`. Wrapping the Application object is
+enough (`sw_helpers.late_bound` does it, and is harmless to repeat).
 
 **`Dispatch` starts SolidWorks if it is not already running** — invisibly
 (`Visible` is `False`), holding a license seat, with no window to find. Worse,
@@ -44,14 +60,31 @@ documents them as methods:
 `GetEndPoint2`, `GetCenterPoint2`, `GetName`, `GetNameForSelection`,
 `GetDimension`, `ActiveSketch`, `GetSketchSegments`, `GetLength`,
 `EditRebuild3`, `GetFirstSubFeature`, `GetNextSubFeature`, `GetChildren`,
-`GetDefinition`, `GetSpecificFeature2`.
+`GetDefinition`, `GetSpecificFeature2`, `RevisionNumber`, `GetDocuments`,
+`GetFirstDisplayDimension`, `CreateMassProperty`, and on topology
+`face.GetEdges`, `face.GetFeature`, `face.GetBox`, `face.GetArea`,
+`edge.GetTwoAdjacentFaces2`, `edge.GetCurve`.
 
 Adding `()` raises `TypeError: 'X' object is not callable`, because the value is
 already resolved by the time you try to call it.
 
 **Try bare attribute access first for anything zero-arg; add `()` only if that
-raises `AttributeError`.** Known exception: `body.GetFaces()` and
-`body.GetEdges()` do *not* auto-invoke and need the parentheses.
+raises `AttributeError`.** Known exceptions: `body.GetFaces()` and
+`body.GetEdges()` do *not* auto-invoke and need the parentheses. `face.GetEdges`
+does auto-invoke; `face.GetEdges()` raises `'tuple' object is not callable`.
+The generated SW2026 typelib declares `IBody2.GetEdges` and `IFace2.GetEdges`
+identically, as zero-argument methods, so the typelib cannot tell you which
+form works. Only a live call can.
+
+Members that take arguments always need parentheses: `CustomPropertyManager("")`,
+`GetDimension2(0)`, `GetNextDisplayDimension(dd)`, `GetTessTriangles(True)`,
+`Equation(i)`, `Value(i)`, `IsSame(a, b)`. True properties never take them:
+`face.Normal`, `ModelToSketchTransform`, `ArrayData`, `IMassProperty.Volume`,
+and `EquationMgr.Status`, which has **no** index argument.
+
+If a bare getter hands you `<bound method ...>` instead of a value, the object
+is early-bound, not late-bound. Adding parentheses is the wrong fix; see
+[below](#a-gen_py-cache-silently-switches-to-early-binding).
 
 ### Why a `callable()` check cannot fix this
 
@@ -114,9 +147,35 @@ is the obvious next thing to try and has **not** been tested here. See
 `win32com.client.gencache.EnsureDispatch("SldWorks.Application")` — and
 `CastTo`, which calls it internally — fails with `Element not found` from
 `GetTypeInfo()` on essentially every live object tried on SW2026. **Stick with
-plain `Dispatch` for actual calls.** If a call returns `None` unexpectedly,
+late binding for actual calls.** If a call returns `None` unexpectedly,
 suspect a wrong argument count/type or a misplaced method before reaching for
 early binding.
+
+### A gen_py cache silently switches to early binding
+
+Asking for early binding fails loudly. Getting it by accident does not.
+
+**Symptom.** `sw.RevisionNumber` prints as
+`<bound method ISldWorks.RevisionNumber of <win32com.gen_py.SldWorks 2026 Type Library...>>`;
+iterating `sw.GetDocuments` raises `'method' object is not iterable`;
+`type(sw)` is `win32com.gen_py.83A33D31-...x0x34x0.SldWorks`. From then on
+every bare getter in this skill returns a bound method.
+
+**Cause.** A generated module for the SldWorks typelib exists in pywin32's
+gen_py cache (`win32com.__gen_path__`). `GetActiveObject` passes the ProgID's
+CLSID to `gencache.GetClassForCLSID`, and `Dispatch` looks the object's type up
+the same way. When a generated class exists, you get it. Running
+`gencache.EnsureModule` on the main SldWorks typelib, the signature-reading
+trick below, writes exactly that module. On the machine where this was found,
+the cache predated the session, and what created it is unknown.
+
+**Fix.** Force late binding on whatever you attach to:
+`dynamic.Dispatch(app._oleobj_)`, i.e. `sw_helpers.connect()` or
+`late_bound(obj)`. `sw_preflight.py` reports the cached state as a
+`com.late_binding` WARN, and `rms_check.py` re-wraps on its own.
+
+*Verified on: SW2026 SP1.1 (rev 34.1.1). Mechanism read from pywin32's
+`win32com/client/__init__.py`.*
 
 ## Reading a real signature without API Help
 
@@ -126,8 +185,21 @@ readable `.py` into `gen_py` with real method names, argument order, and
 argument count — it just cannot itself be used for dispatch.
 
 ```python
-win32com.client.gencache.EnsureModule(clsid, 0, major, minor)
+import inspect
+mod = win32com.client.gencache.EnsureModule(clsid, 0, major, minor)
+inspect.signature(mod.IFeatureManager.FeatureCut4)     # real names and order
+"Status" in mod.IEquationMgr._prop_map_get_            # True: a property, not a method
 ```
+
+**Generating the main SldWorks typelib this way leaves that module cached, and
+from then on plain `Dispatch` on that machine is early-bound**. See
+[above](#a-gen_py-cache-silently-switches-to-early-binding). Code that goes
+through `connect()` is unaffected. The constants typelib holds only enums, so
+caching it (as `constants_module()` does) switches nothing.
+
+The typelib's split into properties and methods does not predict which
+zero-arg members auto-invoke. Every `Get...` member listed above is declared
+as a method.
 
 Find CLSIDs with `win32com.client.selecttlb.EnumTlbs()`.
 
@@ -152,8 +224,14 @@ assumed; `swConstrainedStatus_e` is `1`=unknown, `2`=under, `3`=fully,
 All lengths in the API are **metres** and all angles **radians**, regardless of
 document units. `sw_helpers.mm()` and `sw_helpers.deg()` convert.
 
+**Equation text is the exception.** Values there are in document units, and
+the trig functions take and return **degrees**: `"x" = tan(45) + atn(1)`
+evaluates to `46`. `sin`, `cos`, `tan`, `atn`, `arcsin` and `sqr` (square root)
+all worked in global-variable equations and matched Python to 4 decimal places.
+
 Sketch `Create*` arguments are **not** global `(X, Y, Z)`: their mapping to
-model space depends on the plane, and on one plane includes a sign flip. See
+model space depends on the plane, and on two planes includes a sign flip. Read
+it from the sketch's own transform. See
 [api-recipes.md](api-recipes.md#where-sketch-coordinates-land).
 
 ## Method-location surprises
@@ -177,6 +255,19 @@ right" and is wrong:
 - **`AddDimension2(x, y, z)` lives on `IModelDoc2`**, not on
   `ModelDocExtension` — easy to guess wrong, since `SelectByID2` and
   `GetWhatsWrongCount` both live on `Extension`.
+- **`IEquationMgr.Status` is a property with no index**, unlike its neighbours
+  `Equation(i)` and `Value(i)`. `eq.Status(i)` raises `'int' object is not
+  callable`. It reports on the equation most recently evaluated, so call
+  `eq.Value(i)` and then read `eq.Status`; `-1` marks a broken equation.
+- **`SaveAs3(Name, Version, Options)` on `IModelDoc2`** is the save-to-new-name
+  call that works: no ByRef out-parameters. In `swSaveAsOptions_e`, `1` is
+  Silent and `2` is Copy, which opens a modal dialog.
+- **`MathUtility.CreatePoint(...)` raises `Member not found`** under late binding
+  with a list, a tuple or a `VT_ARRAY | VT_R8` VARIANT. Apply
+  `ModelToSketchTransform.ArrayData` in Python instead (`sw_helpers.sketch_frame`).
+- **`GetBodies2` and `GetPartBox` are declared on `IPartDoc`**, not `IModelDoc2`.
+  They work on a part's `doc` anyway, because late binding resolves names on the
+  real object. Look under `IPartDoc` when reading their signatures.
 
 ## `SelectByID2` type strings
 
@@ -188,12 +279,21 @@ The `Type` string is its own small vocabulary, unrelated to `GetTypeName2()`:
 | A feature-tree folder | `"FTRFOLDER"` — `"BODYFEATURE"` raises `SelectByID2 failed` |
 | A sketch | `"SKETCH"` |
 | A reference plane | `"PLANE"` |
-| The sketch origin | `"ORIGIN"`, with an **empty** name — this is type/coordinate based, not name based |
+| The origin, from inside a sketch | `"EXTSKETCHPOINT"` with the name `"Point1@Origin"`: `sw_helpers.select_origin` |
+| The sketch origin (older form, unreliable) | `"ORIGIN"`, with an **empty** name — type/coordinate based, not name based |
 
-`ext.SelectByID2("", "ORIGIN", 0, 0, 0, append, 0, none_dispatch(), 0)` is
-coordinate-driven, so in a sketch cluttered with overlapping prior test
-dimensions it can pick up a *dimension* (`swSelDIMENSIONS`, type `14`) instead
-of the origin point (`swSelSKETCHPOINTS`, type `11`). Check
-`doc.SelectionManager.GetSelectedObjectType3(index, -1)` when a
-selection-dependent call mysteriously returns `None`; in practice the fix was
-working in a fresh, uncluttered sketch.
+**Select the origin by name:**
+`ext.SelectByID2("Point1@Origin", "EXTSKETCHPOINT", 0, 0, 0, append, 0, none_dispatch(), 0)`.
+It selected type `25` (`swSelEXTSKETCHPOINTS`) and worked for coincident and
+point-alignment relations and for horizontal and vertical dimensions, in 7
+sketches on default planes and on offset planes that do not pass through the
+origin. `("", "EXTSKETCHPOINT")` also selected type 25. Like `"Front Plane"`,
+the name is a feature name and may differ on a localised install.
+
+The empty-name `"ORIGIN"` form has two recorded failures. In a sketch cluttered
+with overlapping prior test dimensions it picked up a *dimension*
+(`swSelDIMENSIONS`, type `14`) instead of the origin point (`swSelSKETCHPOINTS`,
+type `11`). In a fresh, uncluttered Right Plane sketch it raised
+`SelectByID2 failed` outright. It did work for the center-rectangle recipe on
+Front Plane. Check `doc.SelectionManager.GetSelectedObjectType3(index, -1)` when
+a selection-dependent call mysteriously returns `None`.

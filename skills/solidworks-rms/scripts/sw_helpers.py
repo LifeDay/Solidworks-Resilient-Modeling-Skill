@@ -10,18 +10,22 @@ them instead.
     import sys; sys.path.insert(0, r"<skill dir>/scripts")   # absolute, not cwd-relative
     from sw_helpers import connect, call0, select_by_id2, mm, no_input_dim_dialog
 
-Everything here is calibrated against SW2026 SP1.1 (rev 34.1.1) via plain
-late-bound `win32com.client.Dispatch`. See capabilities.yaml for what is
-verified on which version, and references/troubleshooting.md for the symptom
-each guard exists to prevent.
+Everything here is calibrated against SW2026 SP1.1 (rev 34.1.1) under *late*
+binding, which connect() forces. On a machine with a gen_py cache for the
+SldWorks typelib, plain win32com.client.Dispatch / GetActiveObject silently
+return early-bound objects instead, and every bare-getter call below breaks.
+See capabilities.yaml for what is verified on which version, and
+references/troubleshooting.md for the symptom each guard exists to prevent.
 """
 
+import math
+import os
 import time
 
 try:
     import pythoncom
     import win32com.client
-    from win32com.client import VARIANT
+    from win32com.client import VARIANT, dynamic
 except ImportError:  # pragma: no cover - environment problem, not a code path
     raise SystemExit("pywin32 is required:  pip install pywin32")
 
@@ -42,6 +46,15 @@ FOLDER_CONTAINING = 2
 FILLET_UNIFORM_RADIUS = 2
 FILLET_TYPE_SIMPLE = 0
 
+# swSaveAsOptions_e / swSaveAsVersion_e. Silent is 1; 2 is Copy, which opens a
+# modal Save As dialog and leaves the script blocked.
+SAVE_AS_SILENT = 1
+SAVE_AS_CURRENT_VERSION = 0
+
+# swCustomInfoType_e text, swCustomPropertyAddOption_e replace-existing.
+CUSTOM_INFO_TEXT = 30
+CUSTOM_PROPERTY_REPLACE = 2
+
 
 # --------------------------------------------------------------------------
 # Dynamic dispatch
@@ -59,8 +72,29 @@ def call0(obj, name):
     from "already resolved" - calling again raises TypeError or COM
     -2147352573 'Member not found'. Any wrapper that tries to be clever here
     is wrong; this one-liner is the whole correct implementation.
+
+    It only holds for a late-bound `obj`. If this returns a bound method, the
+    object is early-bound - get it through connect() or late_bound().
     """
     return getattr(obj, name)
+
+
+def late_bound(obj):
+    """Re-wrap a COM object for pure late binding.
+
+    win32com.client.Dispatch and GetActiveObject return a makepy-generated,
+    early-bound class whenever gen_py holds a module for the SldWorks typelib -
+    and gencache.EnsureModule on that typelib is one way such a module appears.
+    Early-bound, a bare `doc.GetTitle` is a bound method rather than the title,
+    so every recipe in this skill breaks.
+
+    pywin32's dynamic.CDispatch wraps the objects its calls return with
+    dynamic.Dispatch, so re-wrapping the Application object is enough; objects
+    reached from it are late-bound too. Wrapping again is harmless.
+    """
+    if obj is None or type(obj) is dynamic.CDispatch:
+        return obj
+    return dynamic.Dispatch(obj._oleobj_)
 
 
 def none_dispatch():
@@ -89,7 +123,8 @@ def constants_module():
 
     Note this uses EnsureModule, not EnsureDispatch: EnsureDispatch (and CastTo,
     which calls it) fails with 'Element not found' on SW2026 and must not be
-    used for actual dispatch.
+    used for actual dispatch. The constants typelib holds only enums, so caching
+    it does not switch any object to early binding; caching TLB_MAIN does.
     """
     try:
         return win32com.client.gencache.EnsureModule(TLB_CONSTANTS, 0, 34, 0)
@@ -107,8 +142,7 @@ def mm(value):
 
 
 def deg(value):
-    """Degrees to radians."""
-    import math
+    """Degrees to radians. (Equation *text* is the exception: its trig is in degrees.)"""
     return value * math.pi / 180.0
 
 
@@ -116,13 +150,25 @@ def deg(value):
 # Connecting, and not clobbering the user's session
 # --------------------------------------------------------------------------
 
-def connect(visible=True):
-    """Attach to SolidWorks. Returns the Application object.
+def connect(visible=True, launch=False):
+    """Attach to the running SolidWorks and return a late-bound Application.
 
     This attaches to the user's *real, running* session - there is no sandbox.
     Anything mutating must go through assert_scratch_doc / safe_close below.
+
+    GetActiveObject attaches or fails honestly. Dispatch starts an invisible
+    SolidWorks that never registers in the running object table, so it is used
+    only with launch=True.
     """
-    sw = win32com.client.Dispatch("SldWorks.Application")
+    try:
+        app = win32com.client.GetActiveObject("SldWorks.Application")
+    except pythoncom.com_error:
+        if not launch:
+            raise RuntimeError(
+                "SolidWorks is not running, or not COM-attachable. Run "
+                "scripts/sw_preflight.py, or pass launch=True to start one.")
+        app = win32com.client.Dispatch("SldWorks.Application")
+    sw = late_bound(app)
     sw.Visible = visible
     return sw
 
@@ -167,6 +213,73 @@ def safe_close(sw, doc, known_user_titles):
     return title
 
 
+def tag_doc(doc, key, value):
+    """Stamp `doc` with a document-level custom property identifying the build.
+
+    A title is not a durable identity: SaveAs renames the document, and a
+    multi-process build cannot trust a title remembered from an earlier stage.
+    A tag can be re-read immediately before every mutating call (verify_tag)
+    and used to find the document again (find_tagged_doc).
+    """
+    doc.Extension.CustomPropertyManager("").Add3(
+        key, CUSTOM_INFO_TEXT, value, CUSTOM_PROPERTY_REPLACE)
+    if doc_tag(doc, key) != value:
+        raise RuntimeError("custom property {!r} did not take".format(key))
+
+
+def doc_tag(doc, key):
+    """The document-level custom property `key`, or None if it is absent."""
+    try:
+        return doc.Extension.CustomPropertyManager("").Get(key) or None
+    except Exception:
+        return None
+
+
+def verify_tag(doc, known_user_titles, key, value):
+    """assert_scratch_doc plus a tag check. Call it in the same breath as the mutation."""
+    title = assert_scratch_doc(doc, known_user_titles)
+    if doc_tag(doc, key) != value:
+        raise RuntimeError(
+            "{!r} does not carry {}={!r} - refusing to mutate it.".format(title, key, value))
+    return title
+
+
+def find_tagged_doc(sw, key, value, known_user_titles):
+    """The open document carrying key=value, never one of the user's own.
+
+    Lets each stage of a build run as a separate process and locate the build
+    document by tag rather than by a remembered title.
+    """
+    for doc in call0(sw, "GetDocuments") or ():
+        if call0(doc, "GetTitle") in set(known_user_titles):
+            continue
+        if doc_tag(doc, key) == value:
+            verify_tag(doc, known_user_titles, key, value)
+            return doc
+    raise RuntimeError("No open document carries {}={!r}.".format(key, value))
+
+
+def save_as(doc, path, known_user_titles):
+    """Save `doc` under a new name, silently, and return its new title.
+
+    SaveAs3(Name, Version, Options) has no ByRef out-parameters, so it works
+    under late binding where the 6-arg SaveAs and OpenDoc6 raise Type mismatch.
+    Options must be swSaveAsOptions_Silent (1): 2 is Copy, which opens a modal
+    Save As dialog - after the file has already been written.
+
+    SaveAs renames the document in place, so it is a mutating call and goes
+    through the identity check. It refuses to overwrite an existing file.
+    """
+    path = os.path.abspath(path)
+    if os.path.exists(path):
+        raise RuntimeError("Refusing to overwrite existing {!r}.".format(path))
+    assert_scratch_doc(doc, known_user_titles)
+    err = doc.SaveAs3(path, SAVE_AS_CURRENT_VERSION, SAVE_AS_SILENT)
+    if err != 0:
+        raise RuntimeError("SaveAs3 returned {} for {!r}".format(err, path))
+    return call0(doc, "GetTitle")
+
+
 # --------------------------------------------------------------------------
 # Selection
 # --------------------------------------------------------------------------
@@ -175,18 +288,30 @@ def select_by_id2(ext, name, typ, append=False, x=0.0, y=0.0, z=0.0, mark=0):
     """SelectByID2 with Callout wrapped as a typed null.
 
     Type strings that are not guessable from sibling calls:
-      "BODYFEATURE"  a feature (NOT GetTypeName2()'s value, not "FEAT", not "")
-      "FTRFOLDER"    a feature-tree folder (raises SelectByID2 failed on BODYFEATURE)
-      "SKETCH"       a sketch
-      "PLANE"        a reference plane
-      "ORIGIN"       the sketch origin - pass name="" ; this is type/coordinate
-                     based, so in a sketch cluttered with prior test dimensions
-                     it can pick up a dimension instead. Work in a fresh sketch.
+      "BODYFEATURE"     a feature (NOT GetTypeName2()'s value, not "FEAT", not "")
+      "FTRFOLDER"       a feature-tree folder (raises SelectByID2 failed on BODYFEATURE)
+      "SKETCH"          a sketch
+      "PLANE"           a reference plane
+      "EXTSKETCHPOINT"  the origin from inside a sketch, as "Point1@Origin" -
+                        use select_origin(). The older ("", "ORIGIN") form is
+                        coordinate based: it has picked up a dimension in a
+                        cluttered sketch and raised outright in a clean one.
     """
     ok = ext.SelectByID2(name, typ, x, y, z, append, mark, none_dispatch(), 0)
     if not ok:
         raise RuntimeError("SelectByID2 failed for {!r} as {!r}".format(name, typ))
     return ok
+
+
+def select_origin(ext, append=False):
+    """Select the part origin from inside a sketch, for a relation or dimension.
+
+    ("", "ORIGIN") raised SelectByID2 failed in a fresh Right Plane sketch on
+    SW2026. This name-based form worked in 7 sketches on default and offset
+    planes, selecting type 25 (swSelEXTSKETCHPOINTS). Like "Front Plane", the
+    name is a feature name and may differ on a localised install.
+    """
+    return select_by_id2(ext, "Point1@Origin", "EXTSKETCHPOINT", append=append)
 
 
 def selected_count(doc):
@@ -197,8 +322,9 @@ def selected_count(doc):
 def selected_type(doc, index=1):
     """swSelectType_e of a selection, for diagnosing a wrong pick.
 
-    11 = swSelSKETCHPOINTS, 14 = swSelDIMENSIONS. If a selection-dependent call
-    mysteriously returns None, check this before suspecting the call itself.
+    11 = swSelSKETCHPOINTS, 14 = swSelDIMENSIONS, 25 = swSelEXTSKETCHPOINTS
+    (the origin via select_origin). If a selection-dependent call mysteriously
+    returns None, check this before suspecting the call itself.
     """
     return doc.SelectionManager.GetSelectedObjectType3(index, -1)
 
@@ -208,7 +334,7 @@ def circular_edges(body, center, radius, tol=1e-6):
 
     `center` is a model-space (x, y, z) tuple in metres, computed from the
     parameter set. Sketch Create* arguments are NOT global coordinates, so map
-    them first - see references/api-recipes.md, "Where sketch coordinates land".
+    them first - see sketch_to_model and references/api-recipes.md.
 
     Coordinate-guess SelectByID2("", "EDGE", x, y, z) picks were unreliable for
     fillet edges; matching each circular edge's CircleParams was reliable.
@@ -219,7 +345,7 @@ def circular_edges(body, center, radius, tol=1e-6):
             edge.Select4(True, none_dispatch())
     """
     found = []
-    for edge in body.GetEdges() or ():   # GetEdges does not auto-invoke
+    for edge in body.GetEdges() or ():   # body.GetEdges does not auto-invoke; face.GetEdges does
         curve = edge.GetCurve
         if not curve.IsCircle:
             continue
@@ -233,15 +359,76 @@ def circular_edges(body, center, radius, tol=1e-6):
 
 
 # --------------------------------------------------------------------------
+# Sketch coordinates
+# --------------------------------------------------------------------------
+
+def sketch_frame(doc):
+    """The active sketch's model-to-sketch transform, as (R, t, s).
+
+    ModelToSketchTransform.ArrayData is 16 doubles: a 3x3 rotation, a
+    translation, a scale, then 3 unused. Applying it in Python is the working
+    route - MathUtility.CreatePoint(...).MultiplyTransform raised 'Member not
+    found' under late binding with a list, a tuple and a VT_ARRAY|VT_R8 VARIANT.
+
+    Read this rather than a per-plane table: it covers every plane, including
+    offset planes and part templates nobody has probed. Only valid while the
+    sketch is open for editing.
+    """
+    sketch = call0(doc.SketchManager, "ActiveSketch")
+    if sketch is None:
+        raise RuntimeError("No active sketch - call sketch_frame while editing one.")
+    a = sketch.ModelToSketchTransform.ArrayData
+    return [a[0:3], a[3:6], a[6:9]], a[9:12], a[12]
+
+
+def model_to_sketch(frame, point, tol=1e-9):
+    """Model (x, y, z) in metres -> sketch (u, v, w) in metres, for Create* calls.
+
+    p' = s * (p . R) + t, with p as a row vector. Raises if the point is not on
+    the sketch plane (|w| > tol), which catches a point computed for the wrong
+    plane before it becomes wrong geometry.
+    """
+    R, t, s = frame
+    out = tuple(s * sum(point[i] * R[i][j] for i in range(3)) + t[j] for j in range(3))
+    if abs(out[2]) > tol:
+        raise ValueError("model point {} is off the sketch plane (w={:g})".format(point, out[2]))
+    return out
+
+
+def sketch_to_model(frame, u, v):
+    """Sketch (u, v) in metres -> model (x, y, z) in metres. Inverse of model_to_sketch.
+
+    p = ((p' - t) / s) . R^T. Dimension placement points go through this.
+    """
+    R, t, s = frame
+    q = ((u - t[0]) / s, (v - t[1]) / s, (0.0 - t[2]) / s)
+    return tuple(sum(q[j] * R[i][j] for j in range(3)) for i in range(3))
+
+
+def runs_horizontal(frame, direction):
+    """True if a model-space direction runs horizontally in the open sketch.
+
+    Choose sgHORIZONTALPOINTS2D vs sgVERTICALPOINTS2D, and
+    AddHorizontalDimension2 vs AddVerticalDimension2, from this - not from the
+    plane's name. Global X runs vertically in a Top Plane sketch on the test
+    template, and the wrong relation drags the geometry.
+    """
+    R, _t, s = frame
+    u, v = (s * sum(direction[i] * R[i][j] for i in range(3)) for j in range(2))
+    return abs(u) > abs(v)
+
+
+# --------------------------------------------------------------------------
 # Tree traversal
 # --------------------------------------------------------------------------
 
 def iter_features(doc):
     """Yield every feature in flat tree order.
 
-    A folder contributes a synthetic "<FolderName>___EndTag___" marker feature
-    after its contents. It is FtrFolder-typed, so type-based filters skip it
-    naturally - do not special-case it away.
+    A folder contributes a synthetic "...___EndTag___" marker feature after its
+    contents. It keeps the folder's default name ("Folder1___EndTag___") even
+    after the folder is renamed. It is FtrFolder-typed, so type-based filters
+    skip it naturally - do not special-case it away.
     """
     feat = call0(doc, "FirstFeature")
     while feat:
@@ -272,7 +459,7 @@ def feature_by_name(doc, name):
 # Equations and global variables
 # --------------------------------------------------------------------------
 
-def add_equation(eq, text):
+def add_equation(eq, text, index=-1):
     """Add a global variable or driven dimension, and verify it landed.
 
     Uses Add2. Add3 is the documented primary call but silently fails on
@@ -280,22 +467,40 @@ def add_equation(eq, text):
     of ConfigurationOption. The count check is the point of this wrapper: a
     silent no-op is the failure mode being guarded against.
 
+    `index` -1 appends; any other value inserts at that position, which is how
+    to put a deleted dimension equation back where it was. Returns the index.
+
         add_equation(eq, '"plate_width" = 120')
         add_equation(eq, '"D1@Sketch1" = "plate_width"')
     """
     before = call0(eq, "GetCount")
-    eq.Add2(-1, text, True)
+    eq.Add2(index, text, True)
     after = call0(eq, "GetCount")
     if after <= before:
         raise RuntimeError(
-            "Equation {!r} was not added (count stayed at {}). "
-            "If this build needs Add3, see references/troubleshooting.md.".format(text, before))
-    return after - 1
+            "Equation {!r} was not added (count stayed at {}). If it redefines a "
+            "global that was deleted while dimensions referenced it, or this build "
+            "needs Add3, see references/troubleshooting.md.".format(text, before))
+    return after - 1 if index < 0 else index
 
 
 def equations(eq):
-    """Every equation as (index, text, status), for verifying what actually landed."""
-    return [(i, eq.Equation(i), eq.Status(i)) for i in range(call0(eq, "GetCount"))]
+    """Every equation as (index, text, value, status), for verifying what landed.
+
+    Status is a property with no index argument: it reports on the equation
+    most recently evaluated, so Value(i) is read first. -1 marks a broken
+    equation. Value and status are both None when evaluating it raised, since
+    Status would then still describe the previous equation.
+    """
+    rows = []
+    for i in range(call0(eq, "GetCount")):
+        try:
+            value = eq.Value(i)
+            status = call0(eq, "Status")
+        except Exception:
+            value = status = None
+        rows.append((i, eq.Equation(i), value, status))
+    return rows
 
 
 # --------------------------------------------------------------------------
@@ -310,7 +515,7 @@ def wrap_in_folder(doc, feature_names, folder_name, types=None):
     folder - and renames the result.
 
     `types` maps a feature name to its SelectByID2 type string; anything absent
-    defaults to "BODYFEATURE". Sketches need "SKETCH".
+    defaults to "BODYFEATURE". Sketches need "SKETCH", reference planes "PLANE".
 
     Call this as each RMS group completes. SolidWorks folders must hold
     contiguous features and will not reorder past a dependency, so there is no
@@ -394,7 +599,7 @@ def settle(seconds=0.3):
 
 
 # --------------------------------------------------------------------------
-# Rebuild state
+# Rebuild state and geometry reads
 # --------------------------------------------------------------------------
 
 def rebuild_errors(doc):
@@ -408,3 +613,28 @@ def force_rebuild(doc):
     GetCenterPoint2)."""
     doc.ForceRebuild3(False)
     return rebuild_errors(doc)
+
+
+def volume(doc):
+    """Solid volume of the part in cubic metres. A cheap check after every feature."""
+    return doc.Extension.CreateMassProperty.Volume
+
+
+def body_extents(body):
+    """((xmin, ymin, zmin), (xmax, ymax, zmax)) of a body in metres, from tessellation.
+
+    doc.GetPartBox(True) pads its result (42.196 against a true 42.000 after
+    filleting), and body.GetBodyBox() returned None on a cut body. Tessellation
+    vertices lie on the real surfaces, so these extents never exceed the part;
+    where the extreme is on a curved face they can fall short of it by the
+    tessellation chord tolerance.
+    """
+    lo, hi = [math.inf] * 3, [-math.inf] * 3
+    for face in body.GetFaces() or ():           # GetFaces needs parens
+        coords = face.GetTessTriangles(True) or ()
+        for k in range(0, len(coords) - 2, 3):
+            for axis in range(3):
+                c = coords[k + axis]
+                lo[axis] = min(lo[axis], c)
+                hi[axis] = max(hi[axis], c)
+    return tuple(lo), tuple(hi)

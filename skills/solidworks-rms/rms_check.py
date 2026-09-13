@@ -22,6 +22,11 @@ against the live constants typelib (1=unknown, 2=under, 3=fully, 4=over -
 NOT 1/2/3 as originally guessed). The feature-type classification sets
 below are still the most likely remaining thing to need adjustment for a
 new SW version - run --dump-types on known-good parts and calibrate.
+
+Every bare getter here assumes late binding, so main() re-wraps the attached
+Application with dynamic.Dispatch: where a gen_py cache for the SldWorks
+typelib exists, plain Dispatch/GetActiveObject return early-bound objects whose
+getters are bound methods.
 """
 
 import argparse
@@ -32,6 +37,7 @@ from collections import OrderedDict
 
 try:
     import win32com.client
+    from win32com.client import dynamic
 except ImportError:
     sys.exit("pywin32 is required:  pip install pywin32")
 
@@ -47,11 +53,11 @@ FOLDER_TYPE = "FtrFolder"
 SKETCH_TYPES = {"ProfileFeature", "3DProfileFeature"}
 
 # Features that create solid material. Banned from 1-Ref and 2-Construction.
-# "ICE" also appears in CUT_TYPES/HOLE_TYPES below: on SW2026 it is what a
-# FeatureCut4 cut reports, but it was already listed here from an earlier
-# calibration pass, so it may cover more than one feature kind on some builds.
-# The overlap is harmless - the only rule reading both reads their union - but
-# if a part built here trips a wrong rule, run --dump-types and split them.
+# "ICE" also appears in CUT_TYPES/HOLE_TYPES below. On SW2026 it covers more
+# than one feature kind: FeatureCut4 cuts report it, and so did a second
+# mid-plane FeatureExtrusion3 boss ("Boss-Extrude2"), while the first boss
+# reported "Extrusion". The overlap is harmless for the solids rule, which reads
+# the union, but a boss in 4-Detail counts as a hole for detail.holes_last.
 SOLID_TYPES = {
     "Extrusion", "Revolution", "Sweep", "Loft", "Boss", "Thicken",
     "BaseFlange", "Boundary", "ImportedFeature", "ICE",
@@ -85,11 +91,14 @@ CONSTRUCTION_TYPES = {
 }
 
 # Features SolidWorks creates itself that live outside the group scheme.
+# CommentsFolder, SelectionSetFolder and InkMarkupFolder ("Comments", "Selection
+# Sets", "Markups") appear in every SW2026 part.
 TOLERATED_LOOSE = {
     "OriginProfileFeature", "MateGroup", "HistoryFolder", "SensorFolder",
     "DetailCabinet", "CommentFolder", "FavoriteFolder", "SolidBodyFolder",
     "SurfaceBodyFolder", "DocsFolder", "MaterialFolder", "EnvFolder",
     "LightFolder", "EqnFolder", "RefPlane", "OriginPoint", "CoordSys",
+    "CommentsFolder", "SelectionSetFolder", "InkMarkupFolder",
 }
 
 
@@ -132,7 +141,8 @@ def walk(model):
     """Return an ordered list of (feature, group_name_or_None, depth).
 
     Flat traversal (FirstFeature/GetNextFeature) surfaces a synthetic
-    "<FolderName>___EndTag___" feature immediately after a folder's contents.
+    "...___EndTag___" feature immediately after a folder's contents, named for
+    the folder's default name ("Folder1___EndTag___") even after a rename.
     It is itself FtrFolder-typed, so every rule below that matters skips it
     the same way it skips real folders - do not special-case it away.
     """
@@ -233,7 +243,12 @@ def check_shell_last_in_core(entries, rep):
 
 
 def check_holes_last_in_detail(entries, rep):
-    detail = [f for f, g, d in entries if g == "4-Detail" and f.GetTypeName2 != FOLDER_TYPE]
+    # Sketches are skipped: under one-sketch-per-feature each cut is preceded by
+    # its own sketch, which would otherwise read as holes interleaved with other
+    # detail features.
+    detail = [f for f, g, d in entries
+              if g == "4-Detail" and f.GetTypeName2 != FOLDER_TYPE
+              and f.GetTypeName2 not in SKETCH_TYPES]
     holes = [i for i, f in enumerate(detail) if f.GetTypeName2 in HOLE_TYPES]
     if not holes:
         rep.add("detail.holes_last", "SKIP", "no hole features")
@@ -351,8 +366,15 @@ def check_detail_internal_refs(entries, rep):
             children = feat.GetChildren or []
         except Exception:
             children = []
-        for child in children:
-            cname = getattr(child, "Name", None)
+        named = [c for c in children if getattr(c, "Name", None)]
+        if feat.GetTypeName2 in SKETCH_TYPES and len(named) == 1:
+            # A sketch's single consumer is the feature it defines. That is the
+            # one-sketch-per-feature rule working, not a Detail-to-Detail
+            # coupling; a sketch shared by several features is still reported
+            # here and by sketches.one_sketch_per_feature.
+            continue
+        for child in named:
+            cname = child.Name
             if cname in detail_names and cname != feat.Name:
                 if cname in subfolder_members and feat.Name in subfolder_members:
                     continue  # declared coupled pair
@@ -500,7 +522,13 @@ def main():
                     help="JSON file of approved rule waivers: {rule_id: reason}")
     args = ap.parse_args()
 
-    sw = win32com.client.Dispatch("SldWorks.Application")
+    # GetActiveObject, not Dispatch: Dispatch would start an invisible SolidWorks
+    # when none is attachable. Re-wrap for late binding - see the module docstring.
+    try:
+        app = win32com.client.GetActiveObject("SldWorks.Application")
+    except Exception:
+        sys.exit("SolidWorks is not running or not COM-attachable - run scripts/sw_preflight.py.")
+    sw = dynamic.Dispatch(app._oleobj_)
     model = sw.ActiveDoc
     if model is None:
         sys.exit("No active SolidWorks document.")

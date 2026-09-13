@@ -14,7 +14,7 @@ The plugin manifests live in `.claude-plugin/`; the skill itself lives in
 | [references/troubleshooting.md](skills/solidworks-rms/references/troubleshooting.md) | **Symptom → cause → fix**, keyed by the error string or behaviour you actually have in hand. Start here when something breaks. |
 | [references/api-recipes.md](skills/solidworks-rms/references/api-recipes.md) | Sequences confirmed end-to-end against a live session, with real positional signatures. |
 | [references/dispatch-quirks.md](skills/solidworks-rms/references/dispatch-quirks.md) | How pywin32 late binding behaves against this API — auto-invoking getters, typed nulls, reading signatures from the typelib. |
-| [scripts/sw_helpers.py](skills/solidworks-rms/scripts/sw_helpers.py) | The COM helpers every recipe assumes: `call0`, `none_dispatch`, `select_by_id2`, `add_equation`, `wrap_in_folder`, `no_input_dim_dialog`, plus the live-session safety guards. |
+| [scripts/sw_helpers.py](skills/solidworks-rms/scripts/sw_helpers.py) | The COM helpers every recipe assumes: `connect` (forced late binding), `call0`, `none_dispatch`, `select_by_id2`, `select_origin`, `add_equation`, `wrap_in_folder`, `no_input_dim_dialog`, sketch-coordinate and geometry-measuring helpers, plus the live-session safety guards (`assert_scratch_doc`, `safe_close`, document tags, `save_as`). |
 | [scripts/sw_preflight.py](skills/solidworks-rms/scripts/sw_preflight.py) | Environment check to run before any build script. |
 | [capabilities.yaml](skills/solidworks-rms/capabilities.yaml) | What has actually been verified, and on which SolidWorks version. |
 | [rms_check.py](skills/solidworks-rms/rms_check.py) | A standalone checker that connects to a running SolidWorks session and audits the active document against the RMS rules. |
@@ -62,7 +62,8 @@ python skills/solidworks-rms/scripts/sw_preflight.py --fix
 (Paths are shown from a clone of this repo. For an installed skill, use the
 script's full path inside the install directory.)
 
-Checks Python bitness, `pywin32`, and an attachable SolidWorks; lists the
+Checks Python bitness, `pywin32`, and an attachable SolidWorks; warns when a
+cached gen_py module would make plain `Dispatch` early-bound; lists the
 documents that were already open; and clears the **"Input dimension value"**
 system option, whose modal dialog makes scripted dimensioning appear to hang and
 can leave the session in a state where the next save crashes SolidWorks.

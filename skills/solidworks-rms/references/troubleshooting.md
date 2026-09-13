@@ -12,6 +12,7 @@ superseded by a root cause, it is marked so rather than deleted.
 **Crashes and hangs**
 - [A dimension call hangs forever but SolidWorks is Responding](#a-dimension-call-hangs-forever-but-solidworks-is-responding)
 - [SolidWorks crashes on Save() with RPC -2147023170](#solidworks-crashes-on-save-with-rpc--2147023170)
+- [A SaveAs call opened a Save As dialog and the script hangs](#a-saveas-call-opened-a-save-as-dialog-and-the-script-hangs)
 - [Dimensioning a rectangle edge hangs or crashes SolidWorks](#dimensioning-a-rectangle-edge-hangs-or-crashes-solidworks)
 - [A long script crashes SolidWorks partway through](#a-long-script-crashes-solidworks-partway-through)
 - [The script deadlocks after adding a settle/wait helper](#the-script-deadlocks-after-adding-a-settlewait-helper)
@@ -25,14 +26,21 @@ superseded by a root cause, it is marked so rather than deleted.
 - [CreateLine returns None for a horizontal line](#createline-returns-none-for-a-horizontal-line)
 - [InsertProtrusionSwept4 returns None for a line-plus-arc path](#insertprotrusionswept4-returns-none-for-a-line-plus-arc-path)
 - [SaveBMP returns False and writes nothing](#savebmp-returns-false-and-writes-nothing)
+- [SelectByID2 fails for the origin inside a sketch](#selectbyid2-fails-for-the-origin-inside-a-sketch)
+- [A dimension call returns None right after a horizontal or vertical relation](#a-dimension-call-returns-none-right-after-a-horizontal-or-vertical-relation)
+- [Add2 returns -1 when re-adding a global that dimensions reference](#add2-returns--1-when-re-adding-a-global-that-dimensions-reference)
+- [Setting an equation's text in place does nothing](#setting-an-equations-text-in-place-does-nothing)
+- [GetBodyBox returns None](#getbodybox-returns-none)
 
 **COM type and member errors**
 - ['X' object is not callable, or 'Member not found' (-2147352573)](#x-object-is-not-callable-or-member-not-found--2147352573)
+- [Bare getters return bound methods, or 'method' object is not iterable](#bare-getters-return-bound-methods-or-method-object-is-not-iterable)
 - [DISP_E_TYPEMISMATCH / 'Type mismatch' on a call with an optional Object](#disp_e_typemismatch--type-mismatch-on-a-call-with-an-optional-object)
 - ['Element not found' from EnsureDispatch or CastTo](#element-not-found-from-ensuredispatch-or-castto)
 - ['Unable to read write-only property' from GetCoords()](#unable-to-read-write-only-property-from-getcoords)
 - [SelectByID2 failed for a folder](#selectbyid2-failed-for-a-folder)
 - [AttributeError from GetCircleParams()](#attributeerror-from-getcircleparams)
+- [MathUtility.CreatePoint raises 'Member not found'](#mathutilitycreatepoint-raises-member-not-found)
 - [SaveAs or OpenDoc6 raises 'Type mismatch'](#saveas-or-opendoc6-raises-type-mismatch)
 
 **Session and connection**
@@ -40,14 +48,22 @@ superseded by a root cause, it is marked so rather than deleted.
 - [A script created a sketch in the user's real document](#a-script-created-a-sketch-in-the-users-real-document)
 - [GetDocuments raises instead of returning an empty list](#getdocuments-raises-instead-of-returning-an-empty-list)
 - [ActivateDoc2 raises 'Type mismatch'](#activatedoc2-raises-type-mismatch)
+- [A failed build stage left a sketch open](#a-failed-build-stage-left-a-sketch-open)
 
 **Wrong geometry, no error**
 - [A hole is in the wrong place but the sketch is fully defined and rebuilds clean](#a-hole-is-in-the-wrong-place-but-the-sketch-is-fully-defined-and-rebuilds-clean)
 - [Sketch geometry lands on the wrong global axis, or mirrored](#sketch-geometry-lands-on-the-wrong-global-axis-or-mirrored)
 - [AddDimension2 gave one diagonal dimension instead of H and V](#adddimension2-gave-one-diagonal-dimension-instead-of-h-and-v)
+- [A cut succeeds but removes material on the wrong side](#a-cut-succeeds-but-removes-material-on-the-wrong-side)
 - [ORIGIN selection picked up a dimension instead of the origin](#origin-selection-picked-up-a-dimension-instead-of-the-origin)
+- [GetPartBox reports extents larger than the part](#getpartbox-reports-extents-larger-than-the-part)
+- [A clean, fully defined, RMS-passing model still has a design defect](#a-clean-fully-defined-rms-passing-model-still-has-a-design-defect)
 - [An enum constant has an unexpected value](#an-enum-constant-has-an-unexpected-value)
-- [rms_check.py reports SKIP for detail.holes_last](#rms_checkpy-reports-skip-for-detailholes_last)
+
+**rms_check.py**
+- [rms_check.py reports SKIP or WARN for detail.holes_last](#rms_checkpy-reports-skip-or-warn-for-detailholes_last)
+- [grouping.all_features_in_a_group fails on Comments, Selection Sets, Markups](#groupingall_features_in_a_group-fails-on-comments-selection-sets-markups)
+- [detail.no_internal_references flags a cut's own sketch](#detailno_internal_references-flags-a-cuts-own-sketch)
 
 ---
 
@@ -98,6 +114,28 @@ state, restart SolidWorks.
 
 *Verified on: SW2026 SP1.1.*
 
+## A SaveAs call opened a Save As dialog and the script hangs
+
+**Symptom.** `doc.SaveAs3(path, 0, 2)` never returns, and SolidWorks shows a
+Save As dialog. The target file has already been written.
+
+**Cause.** In `swSaveAsOptions_e`, `2` is **Copy**, not Silent. **Silent is
+`1`.** Both values are confirmed against the SW2026 constants typelib.
+
+**Fix.** `doc.SaveAs3(os.path.abspath(path), 0, 1)` returns `0` and renames the
+document in place. `sw_helpers.save_as` wraps it with the identity check. Check
+that the target does not exist before the call: a dialog-raising attempt may
+already have written it.
+
+If the dialog is already open, cancel it in SolidWorks. In the one recorded
+case the Python client had already been interrupted, the user cancelled the
+dialog by hand, and later `SaveAs3` and `Save()` calls did not crash, with no
+restart. That contrasts with the `Save()` crash above, but it is one observation
+with a different dialog. Don't read it as evidence the crash risk is gone.
+
+*Verified on: SW2026 SP1.1 (option values). Single observation (no crash after
+the interrupt).*
+
 ## Dimensioning a rectangle edge hangs or crashes SolidWorks
 
 **Symptom.** Selecting one of the 4 real edges from `CreateCenterRectangle` via
@@ -136,6 +174,13 @@ within one continuous automation run rather than any single call.
 build into several smaller scripts run as separate processes with a real pause
 between them, or prompt the user to restart SolidWorks between stages.
 
+Staging has since held up. Seven short stage scripts sharing one module built a
+complete part without crashing SolidWorks. Each stage located the build document
+with `find_tagged_doc` rather than a remembered title, and called `verify_tag`
+immediately before every mutating call. The user's original open titles came
+from a small JSON state file written by stage 1. Recipe in
+[api-recipes.md](api-recipes.md#creating-the-build-document).
+
 *Verified on: SW2026 SP1.1. Root cause not found.*
 
 ## The script deadlocks after adding a settle/wait helper
@@ -173,8 +218,9 @@ the count moved. `sw_helpers.add_equation` does both.
 If you must call `Add3`, its trailing `ConfigurationName` `Object` parameter
 rejects `None`, `""` and `[]` alike; only
 `VARIANT(pythoncom.VT_EMPTY, None)` gets the call to execute — at which point it
-still returns `-1`. `GetCount`, `Equation(i)` and `Status(i)` verify what
-actually landed regardless of which `Add*` you used.
+still returns `-1`. `GetCount`, `Equation(i)`, and `Value(i)` followed by the
+index-less `Status` property (`sw_helpers.equations`) verify what actually
+landed regardless of which `Add*` you used.
 
 *Verified on: SW2026 SP1.1 (rev 34.1.1.11). Untested on other versions — treat
 "Add3 is broken on 2026" as confirmed and "Add3 is broken in general" as
@@ -186,16 +232,22 @@ unverified.*
 every combination of end condition (`Blind` with oversized depth, `ThroughAll`,
 `ThroughAllBoth`), `Flip`, and `NormalCut`. The same cut works in the GUI.
 
-**Cause.** The `Dir` argument. Documented only as a direction-flip flag, and
-easy to assume defaults fine at `False` by analogy with `FeatureExtrusion3`
-(where `Dir=False` works).
+**Cause.** The `Dir` argument, which picks the side of the sketch plane the
+cut goes to. It is easy to assume it defaults fine at `False` by analogy with
+`FeatureExtrusion3`, where `Dir=False` works. Most likely the chosen side held
+no material to cut (inferred).
 
-**Fix.** Set **`Dir=True`**. Confirmed by a parameter sweep
-(`itertools.product` over `Flip`, `Dir`, `NormalCut`, `UseFeatScope`/
-`UseAutoSelect`): every `Dir=False` combination returned `None`; every
+**Fix.** Try **`Dir=True`** first, then `False`. In the first session's parameter
+sweep (`itertools.product` over `Flip`, `Dir`, `NormalCut`, `UseFeatScope`/
+`UseAutoSelect`), every `Dir=False` combination returned `None`, and every
 `Dir=True` combination with `UseFeatScope=True, UseAutoSelect=True` succeeded.
+That reflected one sketch's position relative to its material, not a rule. A
+later cut on a *flipped* offset plane needed `Dir=False` and returned a valid
+feature. Check the result either way: the wrong `Dir` can also succeed and
+[cut the wrong side](#a-cut-succeeds-but-removes-material-on-the-wrong-side).
 
-*Verified on: SW2026 SP1.1.*
+*Verified on: SW2026 SP1.1. Partially superseded: this entry originally read
+`Dir=True` as mandatory.*
 
 ## FeatureFillet3 returns None
 
@@ -310,6 +362,110 @@ safe default; only `SaveBMP` has been confirmed to fail on a relative one.
 
 *Verified on: SW2026 SP1.1.*
 
+## SelectByID2 fails for the origin inside a sketch
+
+**Symptom.** `select_by_id2(ext, "", "ORIGIN")` raises `SelectByID2 failed for
+'' as 'ORIGIN'` in a fresh, uncluttered sketch on Right Plane.
+
+**Cause.** Unknown. The same call worked in the center-rectangle recipe on Front
+Plane, and in a cluttered sketch it
+[picked a dimension instead](#origin-selection-picked-up-a-dimension-instead-of-the-origin).
+The empty-name form is not dependable.
+
+**Fix.** Select the origin by name as an external sketch point:
+`sw_helpers.select_origin(ext, append)`, which is
+`SelectByID2("Point1@Origin", "EXTSKETCHPOINT", 0, 0, 0, append, 0, none_dispatch(), 0)`.
+It selected type `25` (`swSelEXTSKETCHPOINTS`). It worked for coincident,
+horizontal-points and vertical-points relations and for horizontal and vertical
+dimensions, on default planes and on offset planes that do not pass through the
+origin. `("", "EXTSKETCHPOINT")` also selected type 25.
+
+*Verified on: SW2026 SP1.1, in 7 sketches.*
+
+## A dimension call returns None right after a horizontal or vertical relation
+
+**Symptom.** `AddHorizontalDimension2` or `AddVerticalDimension2` returns `None`
+straight after `SketchAddConstraints("sgHORIZONTALPOINTS2D")` or
+`("sgVERTICALPOINTS2D")`, and the sketch geometry has jumped.
+
+**Cause.** The relation was picked from the *model* axis. "Both points on global
+X" is horizontal only if global X runs horizontally in that sketch, and in a Top
+Plane sketch on the test template it runs vertically. The wrong relation dragged
+the geometry, and the next dimension was refused.
+
+**Fix.** Derive both the relation and the dimension call from the sketch
+transform: `runs_horizontal(sketch_frame(doc), (1, 0, 0))`. See
+[api-recipes.md](api-recipes.md#where-sketch-coordinates-land). If the sketch
+has since absorbed several failed calls,
+[rebuild it rather than debugging in place](#addhorizontaldimension2-returns-none-for-every-entity-in-one-sketch).
+
+*Verified on: SW2026 SP1.1.*
+
+## Add2 returns -1 when re-adding a global that dimensions reference
+
+**Symptom.** A global was replaced by `eq.Delete(i)` then `add_equation(...)`.
+`Add2` returns `-1` and the count does not move for
+`"pocket_inset_rad" = "end_rad" - "pocket_inset_hole"`. After that, a second
+global feeding the same sketch is rejected too.
+
+- **Accepted:** a plain constant under the same name (`"pocket_inset_rad" = 4.397`),
+  and the identical expression under an unused name
+  (`"zz_b" = "end_rad" - "pocket_inset_hole"`).
+- **Error state:** `GetWhatsWrongCount` is 1, attributed to the Equations
+  feature. The dependent dimension equations (`"D2@Sketch5" = ...` and so on)
+  evaluate to `0`, though the sketch dimensions keep their old values and the
+  sketches still report fully defined.
+- **Ruled out:** list order. A forward reference inserted at index 0 was
+  accepted, with automatic solve order on.
+
+**Cause (inferred).** While the global was missing, the dimension equations that
+use it went into an error state, and that state doesn't clear when the global
+comes back. SolidWorks then rejects any non-constant equation for a global that
+feeds an erroring dimension equation.
+
+**Fix.**
+1. Delete the dependent dimension equations. The what's-wrong count drops to 0.
+2. Delete and re-add the globals with their new expressions. They are accepted now.
+3. Re-add the dimension equations at their original positions with
+   `add_equation(eq, text, index=original_index)`.
+4. Rebuild: 0 errors, and the values matched Python exactly.
+
+Better: don't delete a referenced global in order to change it. No way to edit
+an equation in place has worked yet ([next entry](#setting-an-equations-text-in-place-does-nothing)),
+so for now use the order above. Check each equation's health with
+`sw_helpers.equations(eq)`, which reads `Value(i)` before the index-less `Status`
+property; `-1` marks a broken one.
+
+*Verified on: SW2026 SP1.1 (symptom, fix). Inferred (cause).*
+
+## Setting an equation's text in place does nothing
+
+**Symptom.** Writing `Equation(i)` as a property, with
+`eq._oleobj_.Invoke(dispid, 0, pythoncom.DISPATCH_PROPERTYPUT, 0, i, text)`,
+raises nothing and leaves the text unchanged.
+
+**Fix.** None confirmed. `SetEquationAndConfigurationOption(Index, Equation,
+WhichConfigurations, ConfigNames)` exists in the SW2026 typelib and has not been
+tried. For now, change an equation by deleting and re-adding it, in the order
+[above](#add2-returns--1-when-re-adding-a-global-that-dimensions-reference) when
+dimensions reference it.
+
+*Verified on: SW2026 SP1.1 (the silent no-op).*
+
+## GetBodyBox returns None
+
+**Symptom.** `body.GetBodyBox()` returns `None`. It had worked on a plain
+extrusion earlier in the same session, and failed on the finished, cut body.
+
+**Cause.** Unknown.
+
+**Fix.** Use `sw_helpers.body_extents(body)`, which takes min/max over
+tessellation vertices. `doc.GetPartBox(True)` is not a substitute where tenths
+of a millimetre matter:
+[it is padded](#getpartbox-reports-extents-larger-than-the-part).
+
+*Single observation: SW2026 SP1.1.*
+
 ---
 
 ## 'X' object is not callable, or 'Member not found' (-2147352573)
@@ -326,8 +482,36 @@ binding. The value is already resolved by the time you add `()`.
 [dispatch-quirks.md](dispatch-quirks.md#zero-argument-getters-auto-invoke--call-them-without-parentheses).
 
 Known exceptions that *do* need parens: `body.GetFaces()`, `body.GetEdges()`.
+`face.GetEdges` is **not** one of them: `face.GetEdges()` raises `TypeError:
+'tuple' object is not callable`. The typelib declares both `GetEdges` the same
+way, so it can't settle which is which.
+
+If the opposite happens and a bare getter gives a bound method instead of a
+value, you are early-bound; see the next entry.
 
 *Verified on: SW2026 SP1.1.*
+
+## Bare getters return bound methods, or 'method' object is not iterable
+
+**Symptom.** `sw_preflight.py` or your own script prints the version as
+`<bound method ISldWorks.RevisionNumber of <win32com.gen_py.SldWorks 2026 Type Library...>>`.
+Iterating `sw.GetDocuments` raises `'method' object is not iterable`. `doc.GetTitle`,
+`feat.GetTypeName2` and every other bare getter give bound methods instead of
+values. `type(sw)` is a `win32com.gen_py...` class.
+
+**Cause.** Early binding you didn't ask for. pywin32's gen_py cache holds a module
+for the SldWorks typelib, so `GetActiveObject` and `Dispatch` return the
+generated class. `gencache.EnsureModule` on the main typelib, the
+signature-reading trick, writes that module.
+
+**Fix.** Don't add parentheses everywhere. Force late binding with
+`dynamic.Dispatch(app._oleobj_)`, which is what `sw_helpers.connect()` and
+`late_bound()` do. Objects reached from a late-bound parent stay late-bound.
+`sw_preflight.py` reports the condition as a `com.late_binding` WARN, and
+`rms_check.py` re-wraps on its own. Details in
+[dispatch-quirks.md](dispatch-quirks.md#a-gen_py-cache-silently-switches-to-early-binding).
+
+*Verified on: SW2026 SP1.1 (rev 34.1.1).*
 
 ## DISP_E_TYPEMISMATCH / 'Type mismatch' on a call with an optional Object
 
@@ -355,6 +539,10 @@ To read a real signature, use `gencache.EnsureModule(clsid, 0, major, minor)`,
 which succeeds where `EnsureDispatch` fails and writes a readable `.py` with
 real argument order and count. See
 [dispatch-quirks.md](dispatch-quirks.md#reading-a-real-signature-without-api-help).
+That module stays cached, and from then on plain `Dispatch` on that machine is
+early-bound; see
+[bare getters return bound methods](#bare-getters-return-bound-methods-or-method-object-is-not-iterable).
+Code that attaches through `connect()` is unaffected.
 
 *Verified on: SW2026 SP1.1 (rev 34.1.1).*
 
@@ -397,6 +585,19 @@ cx, cy, cz, nx, ny, nz, r = edge.GetCurve.CircleParams   # centre, axis, radius;
 
 *Verified on: SW2026 SP1.1.*
 
+## MathUtility.CreatePoint raises 'Member not found'
+
+**Symptom.** `sw.GetMathUtility.CreatePoint(arr)` raises `-2147352573 Member not
+found`, whether `arr` is a list, a tuple or a `VT_ARRAY | VT_R8` VARIANT. That
+puts `MultiplyTransform` out of reach for mapping model points into a sketch.
+
+**Fix.** Apply the transform in Python. `sketch_frame(doc)` reads
+`ActiveSketch.ModelToSketchTransform.ArrayData`, and `model_to_sketch` /
+`sketch_to_model` apply it. See
+[api-recipes.md](api-recipes.md#where-sketch-coordinates-land).
+
+*Verified on: SW2026 SP1.1.*
+
 ## SaveAs or OpenDoc6 raises 'Type mismatch'
 
 **Symptom.** `SaveAs(...)` raises `Type mismatch` when `ExportData`, `Errors`
@@ -415,13 +616,16 @@ The session reported this as `IModelDoc2.SaveAs`. In the typelib, though, the
 **Fix.** Use the calls without out-parameters:
 
 - Save an already-named document in place: **`doc.Save()`**.
+- Save to a new name: **`doc.SaveAs3(os.path.abspath(path), 0, 1)`**, or
+  `sw_helpers.save_as`. Options `1` is Silent; `2` is Copy and
+  [opens a modal dialog](#a-saveas-call-opened-a-save-as-dialog-and-the-script-hangs).
+  It returns `0` and renames the document in place, and `Save()` works afterwards.
 - Open a document: **`sw.OpenDoc(os.path.abspath(path), doc_type)`**, where
   `doc_type` comes from `swDocumentTypes_e` (resolve with
   `constants_module()`). It returns the document, or `None` with no reason.
 
-No working form of SaveAs to a *new* name has been recorded yet. Untested
-candidate: `VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)` for `Errors` and
-`Warnings`, and `none_dispatch()` for `ExportData`, which is typed `IDispatch`.
+`VARIANT(pythoncom.VT_BYREF | pythoncom.VT_I4, 0)` for `Errors` and `Warnings`
+remains untested. With `SaveAs3` working, there is little reason to try it.
 
 *Verified on: SW2026 SP1.1.*
 
@@ -493,6 +697,34 @@ unnecessary when only one document is open.
 
 *Verified on: SW2026 SP1.1.*
 
+## A failed build stage left a sketch open
+
+**Symptom.** A stage raised while building a sketch. The document is still in
+sketch edit mode with the partial entities, and the next run creates another
+sketch while that one is still open.
+
+**Fix, with no dialog:** exit the sketch, then delete the leftover with
+`DeleteSelection2`, which avoids the confirmation dialog `EditDelete` can raise.
+
+```python
+sm = doc.SketchManager
+if call0(sm, "ActiveSketch") is not None:
+    sm.InsertSketch(True)                       # toggles - only call it while a sketch is open
+leftover = last_feature(doc)
+if call0(leftover, "GetTypeName2") == "ProfileFeature" and not call0(leftover, "GetChildren"):
+    verify_tag(doc, known, TAG, VALUE)
+    doc.ClearSelection2(True)
+    select_by_id2(doc.Extension, leftover.Name, "SKETCH")
+    doc.Extension.DeleteSelection2(0)
+```
+
+Check that the sketch has no children before deleting it. Put each stage's
+sketch building in `try`/`except` so this cleanup runs automatically.
+
+*Verified on: SW2026 SP1.1, used twice (exit, select, `DeleteSelection2(0)`).
+The `ActiveSketch` guard is a precaution against the toggle, not a recorded
+failure.*
+
 ---
 
 ## A hole is in the wrong place but the sketch is fully defined and rebuilds clean
@@ -517,7 +749,9 @@ The relation itself was correct (`GetRelationType` = `9`,
 prove correct geometry.
 
 This is the general lesson: a clean rebuild is necessary, not sufficient. There
-is no automated geometry check in this repo yet.
+is no automated geometry check in this repo yet. The manual checks that have
+worked — volume, face normals, tessellated extents, standard-view screenshots —
+are in [api-recipes.md](api-recipes.md#measuring-the-result).
 
 *Verified on: SW2026 SP1.1.*
 
@@ -528,18 +762,21 @@ end up along a different global axis than intended, or come out mirrored on one
 plane. A fillet edge match or face check computed in global coordinates finds
 nothing. The model rebuilds clean.
 
-**Cause.** `SketchManager.Create*(x, y, z, ...)` arguments are not global
-`(X, Y, Z)`. Measured on this install: on Front Plane, arg1 → global Y, arg2 →
-global Z, arg3 discarded. On Right Plane, arg1 → global **−X** (negated), arg2 →
-global Z, arg3 discarded.
+**Cause.** `SketchManager.Create*(x, y, z, ...)` arguments are sketch
+coordinates, not global `(X, Y, Z)`, and the mapping differs per plane. On this
+install's template: Front Plane arg1 → global Y, arg2 → global Z. Right Plane
+arg1 → global **−X**, arg2 → global Z. Top Plane arg1 → global Y, arg2 → global
+**−X**. arg3 is discarded on all three.
 
-**Fix.** Map through the table in
-[api-recipes.md](api-recipes.md#where-sketch-coordinates-land), and re-measure
-with the circle-extrude-bounding-box probe described there before trusting it on
-a different template or on Top Plane. Values read back from the model
-(`GetPoint`, `CircleParams`) are global, so convert before comparing.
+**Fix.** Don't depend on the table. Read the open sketch's own transform with
+`sketch_frame(doc)`, then map with `model_to_sketch` / `sketch_to_model`. That
+also covers offset planes and templates nobody has probed. Recipe in
+[api-recipes.md](api-recipes.md#where-sketch-coordinates-land). Values read back
+from the model (`GetPoint`, `CircleParams`, `Normal`) are global, so convert
+before comparing.
 
-*Verified on: SW2026 SP1.1 (Front and Right Plane only).*
+*Verified on: SW2026 SP1.1 (table: Front, Right and Top Plane; transform: Right,
+Top and two offset planes).*
 
 ## AddDimension2 gave one diagonal dimension instead of H and V
 
@@ -550,6 +787,24 @@ vertical dimensions.
 **Fix.** Call `AddHorizontalDimension2` and `AddVerticalDimension2` explicitly
 (both take `(X, Y, Z)` placement args the same way). **Re-select both entities
 before each call** — selection does not persist across them.
+
+*Verified on: SW2026 SP1.1.*
+
+## A cut succeeds but removes material on the wrong side
+
+**Symptom.** `FeatureCut4` returns a valid feature and the rebuild is clean, but
+the cut went the wrong way. In the recorded case, an upper pocket sketched on an
+offset plane at Z = +7 cut correctly with `Dir=True`. The identical lower pocket,
+on a *flipped* offset plane at Z = −7, cut toward the web instead of away from it.
+
+**Cause.** `Dir` picks the side of the sketch plane, and flipping the plane
+reverses which side `True` means.
+
+**Fix.** Don't hard-code `Dir`. Create the cut, check it, and if it's wrong, call
+`doc.EditUndo2(1)` and try the other value. The lower pocket needed
+`Dir=False`. Undo removed the failed feature cleanly, though feature numbering
+still advances, so find features by Description rather than default name. The
+checks that caught it are in [api-recipes.md](api-recipes.md#cuts).
 
 *Verified on: SW2026 SP1.1.*
 
@@ -564,12 +819,50 @@ before each call** — selection does not persist across them.
 sketch cluttered with overlapping prior test dimensions near the origin, it
 picks the wrong thing.
 
-**Fix.** Check `doc.SelectionManager.GetSelectedObjectType3(index, -1)` to
-confirm what you got (`sw_helpers.selected_type`). In practice the fix was
-working in a fresh, uncluttered sketch rather than reusing one across many
-manual test iterations.
+**Fix.** Select the origin by name instead, with `sw_helpers.select_origin(ext, append)`,
+i.e. `("Point1@Origin", "EXTSKETCHPOINT")`; see
+[SelectByID2 fails for the origin inside a sketch](#selectbyid2-fails-for-the-origin-inside-a-sketch).
+Check `doc.SelectionManager.GetSelectedObjectType3(index, -1)` to confirm what
+you got (`sw_helpers.selected_type`); `select_origin` gives type `25`. Before
+that form was found, the workaround was a fresh, uncluttered sketch.
 
 *Verified on: SW2026 SP1.1.*
+
+## GetPartBox reports extents larger than the part
+
+**Symptom.** After filleting, `doc.GetPartBox(True)` gave X max **42.196** where
+the true extreme is **42.000**, and Y ±34.705 against a true ±34.53.
+
+**Cause.** The box is padded, not tight.
+
+**Fix.** Where tenths of a millimetre matter, use `sw_helpers.body_extents(body)`,
+which takes min/max over `face.GetTessTriangles(True)` vertices, or check planar
+faces analytically with `face.Normal` and `face.GetBox`.
+
+*Verified on: SW2026 SP1.1, compared against tessellation.*
+
+## A clean, fully defined, RMS-passing model still has a design defect
+
+**Symptom.** 0 rebuild errors, every sketch fully defined, bounding boxes exact,
+and the part is still wrong. In the recorded case, a drafted pocket left a
+knife-edge rim near the ring. It was 7 mm wide at the pocket floor, but draft on
+both sides thinned it to nothing at Z ≈ 32, removing part of the top face.
+
+**Cause.** A design-intent error, not an API one. The drawing's 7 mm rim is
+measured at the rim top; the model applied it at the floor. With draft on both
+the outer faces and the pocket walls, the two readings give very different parts.
+
+**Fix.** Look at the part. Save
+[standard-view screenshots](api-recipes.md#standard-view-screenshots) after each
+major stage. This defect showed in an orthographic side view as a flat step where
+the drawing has a straight tangent face. When a dimension falls on a drafted
+wall, decide which height it applies at before building, and compare the widths
+it implies against the drawing. Here the floor width near the ring came out
+≈19 mm under the top reading, ≈33 mm under the floor reading, and ≈17 mm scaled
+from the drawing.
+
+*Verified on: SW2026 SP1.1. A second, different example of the
+[wrong-point lesson](#a-hole-is-in-the-wrong-place-but-the-sketch-is-fully-defined-and-rebuilds-clean).*
 
 ## An enum constant has an unexpected value
 
@@ -588,17 +881,53 @@ Never hard-code an enum you have not verified on the target version.
 
 *Verified on: SW2026 SP1.1.*
 
-## rms_check.py reports SKIP for detail.holes_last
+---
 
-**Symptom.** An all-cut `4-Detail` folder produces `SKIP  detail.holes_last`
-instead of PASS or FAIL.
+## rms_check.py reports SKIP or WARN for detail.holes_last
 
-**Cause.** Cuts created via `FeatureCut4` report `GetTypeName2 == "ICE"` on this
-build, not `"Cut"`. `"ICE"` is now in the checker's `CUT_TYPES` and `HOLE_TYPES`,
-but a differently-created cut may still land outside the classification sets.
+**Symptom.** An all-cut `4-Detail` folder produces `SKIP  detail.holes_last`, or
+`WARN  detail.holes_last  holes interleaved with other detail features`.
 
-**Fix.** Run `python "<skill dir>/rms_check.py" --dump-types` against the part and add the
-observed type strings to the sets at the top of the checker. Cosmetic only — it
-does not cause a false FAIL.
+**Cause.** Two calibration gaps. The SKIP: cuts created via `FeatureCut4` report
+`GetTypeName2 == "ICE"` on this build, not `"Cut"`. The WARN: the sketch in
+front of each cut counted as a non-hole feature between the holes.
 
-*Verified on: SW2026 SP1.1.*
+**Fix.** Both are fixed in the checker. `"ICE"` is in `CUT_TYPES` and
+`HOLE_TYPES`, and the rule skips sketches. `"ICE"` also covers some bosses, so a
+boss in `4-Detail` still counts as a hole here. If a part trips this, run
+`python "<skill dir>/rms_check.py" --dump-types` and adjust the sets at the top
+of the checker. Cosmetic only — it does not cause a false FAIL.
+
+*Verified on: SW2026 SP1.1 (both symptoms). The sketch-skipping fix has not yet
+been re-run against a live part.*
+
+## grouping.all_features_in_a_group fails on Comments, Selection Sets, Markups
+
+**Symptom.** Every SW2026 part fails `grouping.all_features_in_a_group`, listing
+Comments, Selection Sets and Markups as ungrouped.
+
+**Cause.** SW2026 adds system folders of type `CommentsFolder`,
+`SelectionSetFolder` and `InkMarkupFolder`, and `TOLERATED_LOOSE` did not list
+them.
+
+**Fix.** Fixed in the checker. On another version, run `--dump-types` and add any
+new system types to `TOLERATED_LOOSE`.
+
+*Verified on: SW2026 SP1.1 (rev 34.1.1).*
+
+## detail.no_internal_references flags a cut's own sketch
+
+**Symptom.** `FAIL  detail.no_internal_references  Cut-Extrude7 -> Sketch9` on a
+part where each detail feature has its own sketch.
+
+**Cause.** The rule read the sketch-to-feature parent link as a coupling
+between two detail features. Under the one-sketch-per-feature rule, every
+sketch-based detail feature has that link, so the rule could never pass.
+
+**Fix.** Fixed in the checker: a sketch whose only child is the feature it
+defines is skipped. A sketch with several consumers is still reported, here and
+by `sketches.one_sketch_per_feature`. With an older copy of the checker, waive
+the rule in `rms_exceptions.json` and give this as the reason.
+
+*Verified on: SW2026 SP1.1 (the false positive). The fix has not yet been re-run
+against a live part.*

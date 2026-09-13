@@ -13,17 +13,20 @@ couple of arguments, check the argument order rather than assuming.
 |---|---|
 | Something is broken and you have an error string, a `None`, or a hang | **[references/troubleshooting.md](references/troubleshooting.md)** — symptom → cause → fix |
 | You are about to write a call and want the working sequence | **[references/api-recipes.md](references/api-recipes.md)** — confirmed end-to-end recipes |
-| You are wondering how pywin32 late binding behaves here | **[references/dispatch-quirks.md](references/dispatch-quirks.md)** — auto-invoking getters, typed nulls, typelib reading |
+| You are wondering how pywin32 late binding behaves here | **[references/dispatch-quirks.md](references/dispatch-quirks.md)** — forcing late binding, auto-invoking getters, typed nulls, typelib reading |
 | You need to know whether something is actually verified | **[capabilities.yaml](capabilities.yaml)** — per-capability status by version |
 
 ## The five things that cost the most time
 
 If you read nothing else:
 
-1. **Zero-arg getters are properties here.** `doc.GetTitle`, not
-   `doc.GetTitle()`. A `callable()`-based wrapper cannot fix this and will make
-   it worse — use `sw_helpers.call0`.
-   ([dispatch-quirks](references/dispatch-quirks.md#zero-argument-getters-auto-invoke--call-them-without-parentheses))
+1. **Zero-arg getters are properties here — under late binding, which only
+   `sw_helpers.connect()` guarantees.** `doc.GetTitle`, not `doc.GetTitle()`.
+   If a gen_py cache exists for the SldWorks typelib, plain `Dispatch` is
+   silently early-bound and bare getters return bound methods. A
+   `callable()`-based wrapper fixes neither case; use `connect()` and `call0`.
+   ([dispatch-quirks](references/dispatch-quirks.md#zero-argument-getters-auto-invoke--call-them-without-parentheses),
+   [early binding](references/dispatch-quirks.md#a-gen_py-cache-silently-switches-to-early-binding))
 2. **Turn off "Input dimension value" before any scripted dimensioning.** It
    opens a modal on every dimension call; killing the client while it is open
    makes the next `Save()` crash SolidWorks.
@@ -40,9 +43,10 @@ If you read nothing else:
 
 ## Helpers
 
-Do not re-derive `call0`, `none_dispatch`, `select_by_id2`, `last_feature`,
-`add_equation`, `wrap_in_folder` or `circular_edges` per script — re-deriving them is how two
-SolidWorks crashes happened. They ship in
+Do not re-derive `connect`, `call0`, `none_dispatch`, `select_by_id2`,
+`select_origin`, `last_feature`, `add_equation`, `wrap_in_folder`,
+`circular_edges`, the sketch-transform helpers, `save_as` or the document-tag
+guards per script — re-deriving them is how two SolidWorks crashes happened. They ship in
 [`scripts/sw_helpers.py`](scripts/sw_helpers.py), and every recipe assumes them.
 
 Run [`scripts/sw_preflight.py`](scripts/sw_preflight.py) before any build script.

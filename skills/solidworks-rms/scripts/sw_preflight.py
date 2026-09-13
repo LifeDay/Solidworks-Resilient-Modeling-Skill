@@ -92,7 +92,7 @@ def _reachable(state):
     """
     import win32com.client
     try:
-        state["sw"] = win32com.client.GetActiveObject("SldWorks.Application")
+        _attach(state, win32com.client.GetActiveObject("SldWorks.Application"))
         return Result(True, "attached to running instance")
     except Exception:
         pass
@@ -118,15 +118,45 @@ def _reachable(state):
                       "Use --launch to start a headless instance instead.")
 
     try:
-        sw = win32com.client.Dispatch("SldWorks.Application")
-        sw.Visible = True
-        state["sw"] = sw
+        _attach(state, win32com.client.Dispatch("SldWorks.Application"))
+        state["sw"].Visible = True
         state["launched"] = True
     except Exception as exc:
         return Result(False, str(exc),
                       "COM registration may be missing - try a version-qualified "
                       "ProgID such as SldWorks.Application.32.")
     return Result(True, "launched a new instance (--launch)")
+
+
+def _attach(state, app):
+    """Store a late-bound handle, remembering whether pywin32 handed back an early-bound one."""
+    from win32com.client import dynamic
+    state["early_bound"] = type(app).__module__.startswith("win32com.gen_py")
+    state["sw"] = dynamic.Dispatch(app._oleobj_)
+
+
+@check("com.late_binding", critical=False)
+def _binding(state):
+    """Whether plain Dispatch / GetActiveObject are early-bound on this machine.
+
+    With a gen_py module cached for the SldWorks typelib, both return makepy
+    classes: zero-arg getters come back as bound methods, and the version and
+    document checks below would print '<bound method ...>' and "'method' object
+    is not iterable". This script, sw_helpers.connect() and rms_check.py re-wrap
+    with dynamic.Dispatch, so they are unaffected. Hand-written Dispatch calls
+    are not. Confirmed on SW2026 SP1.1.
+    """
+    if state.get("sw") is None:
+        return Result(None, "skipped - no connection")
+    if not state.get("early_bound"):
+        return Result(True, "late-bound")
+    import win32com
+    return Result(
+        False, "gen_py cache present - plain Dispatch is early-bound here (re-wrapped)",
+        "Attach through sw_helpers.connect(), or wrap any object from "
+        "win32com.client.Dispatch/GetActiveObject with "
+        "win32com.client.dynamic.Dispatch(obj._oleobj_). Cache folder: "
+        + win32com.__gen_path__)
 
 
 @check("solidworks.version", critical=False)
@@ -230,6 +260,7 @@ def main():
         print(json.dumps({
             "ok": not failed,
             "revision": state.get("revision"),
+            "early_bound_by_default": state.get("early_bound"),
             "open_titles": state.get("open_titles", []),
             "checks": {n: {"ok": r.ok, "detail": r.detail, "remedy": r.remedy}
                        for n, _, r in rows},
