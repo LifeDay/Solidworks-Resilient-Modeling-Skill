@@ -30,7 +30,7 @@ API Help before relying on it elsewhere.
 Scripted feature trees tend to fail the first time someone edits a dimension, because features get wired to whatever geometry happened to be under the cursor when they were created. RMS fixes this by:
 
 - Grouping every feature into one of six ordered folders (`1-Ref`, `2-Construction`, `3-Core`, `4-Detail`, `5-Modify`, `6-Quarantine`) so dependencies only ever point earlier in the tree.
-- Driving every meaningful dimension from named global variables and equations instead of literal values, so the model is editable in the GUI, not just by re-running the script.
+- Driving the true design parameters from named global variables and equations instead of literal values, so the model is editable in the GUI, not just by re-running the script.
 - Enforcing a deterministic selection policy (select by name, then by parameter-derived coordinate, then by a feature's own created-entity list) instead of picking raw topological indices.
 
 See [SKILL.md](skills/solidworks-rms/SKILL.md) for the full ruleset.
